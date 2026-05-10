@@ -13,6 +13,8 @@ Config is YAML and loaded from `config.yaml` by default. If no config file exist
 - `budget` - estimated task/project cost limits.
 - `limits` - hard token, context, patch, stdout/stderr, and validation output caps.
 - `inference` - cheap builder Flex/Standard tier policy.
+- `convergence` - cheap retry convergence/divergence thresholds.
+- `diagnosis` - diagnosis-only reviewer packet and dry-run interface settings.
 - `pricing` - model-role pricing and output token assumptions.
 - `validation` - max changed files, forbidden paths, default commands.
 - `tool_permissions` - allowlisted deterministic command names.
@@ -115,6 +117,28 @@ inference:
 Flex pricing/model entries are separate from Standard entries. Keep both
 config-driven and audit them against current Google pricing before real use.
 The builder tier policy does not add a GPT fallback.
+
+## Diagnosis Settings
+
+Diagnosis is disabled by default. When enabled in dry-run mode, it builds a
+compact review packet and records a structured placeholder diagnosis. Real
+reviewer API calls are not implemented yet.
+
+```yaml
+diagnosis:
+  enabled: false
+  dry_run: true
+  model_role: "expensive_reviewer"
+  max_packet_chars: 24000
+  max_diff_chars: 10000
+  max_stdout_chars: 4000
+  max_stderr_chars: 4000
+  allow_direct_patch: false
+```
+
+`allow_direct_patch` must stay `false` unless a future implementation adds
+explicit human approval, budget override, and patch validation for expensive
+model output.
 
 ## Git Settings
 

@@ -23,6 +23,7 @@ Complete:
 - hard token, context, output, patch, stdout/stderr, and validation output limits
 - Gemini Flex/Standard cheap builder tier policy with bounded Standard fallback
 - convergence/divergence attempt metrics with diagnosis-needed escalation packages
+- diagnosis-only review packet builder and dry-run reviewer interface
 - unit tests for core safety and workflow paths
 
 Placeholder or intentionally limited:
@@ -124,12 +125,13 @@ Use:
 
 ## Phase 1.5 planning context
 
-Phase 1.5 planning docs have been added under `docs/`. Steps 1-4 have been
+Phase 1.5 planning docs have been added under `docs/`. Steps 1-5 have been
 implemented:
 - persistent SQLite budget ledger and pre-call cost estimation
 - hard token/context/output/patch/stdout/stderr/validation-output limits
 - Gemini Flex default builder tier with controlled Standard fallback
 - deterministic convergence/divergence metrics for cheap retries
+- diagnosis-only review packet interface, dry-run by default
 
 New architecture philosophy:
 - cheap model = builder/executor/distiller
@@ -184,6 +186,12 @@ Implemented Phase 1.5 Step 4 files:
 - attempt metric state fields in `coding_orchestrator/schemas.py`
 - retry-loop decision wiring in `coding_orchestrator/orchestrator/engine.py`
 
+Implemented Phase 1.5 Step 5 files:
+- `coding_orchestrator/orchestrator/diagnosis.py`
+- `tests/test_diagnosis.py`
+- review packet and diagnosis result schemas in `coding_orchestrator/schemas.py`
+- diagnosis-only wiring in `coding_orchestrator/orchestrator/engine.py`
+
 Current budget behavior:
 - pricing is config-driven by model role
 - pre-call estimates are made from actual context before model/OpenCode calls
@@ -211,7 +219,10 @@ Current convergence behavior:
 - convergence/stagnation/divergence is deterministic and config-driven
 - hard stops can trigger on syntax regression or unrelated file touches
 - non-converging tasks create `diagnosis_needed` escalation packages
-- no GPT/reviewer call is made for diagnosis yet
+- diagnosis packages include compact review packets
+- optional diagnosis dry-run records structured placeholder guidance
+- no real GPT/reviewer API call is implemented yet
+- direct expensive-model patches remain disabled by policy
 
 ## Coding standards for this repo
 

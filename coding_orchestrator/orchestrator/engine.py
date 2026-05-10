@@ -14,6 +14,12 @@ from coding_orchestrator.orchestrator.budget import (
     BudgetUsage,
 )
 from coding_orchestrator.orchestrator.convergence import ConvergenceEvaluator
+from coding_orchestrator.orchestrator.diagnosis import (
+    DiagnosisError,
+    DiagnosisReviewer,
+    ReviewPacketBuilder,
+    packet_to_prompt,
+)
 from coding_orchestrator.orchestrator.escalation import EscalationManager
 from coding_orchestrator.orchestrator.limits import LimitExceeded, LimitGuard
 from coding_orchestrator.orchestrator.router import TaskClassifier
@@ -25,6 +31,7 @@ from coding_orchestrator.schemas import (
     BuilderResult,
     ConvergenceDecision,
     OrchestratorState,
+    ReviewPacket,
     TaskSpec,
     ValidationResult,
     load_task_file,
@@ -62,6 +69,8 @@ class WorkflowEngine:
         self.limits = LimitGuard(config.limits)
         self.tier_policy = CheapBuilderTierPolicy(config.inference.cheap_builder)
         self.convergence = ConvergenceEvaluator(config.convergence)
+        self.review_packet_builder = ReviewPacketBuilder(config.diagnosis)
+        self.diagnosis_reviewer = DiagnosisReviewer(config.diagnosis)
         self.logger = JsonlLogger(Path(config.log_path))
         self.state_store = StateStore(Path(config.state_path))
         self.escalation = EscalationManager(Path("logs/escalations"))
@@ -431,14 +440,28 @@ class WorkflowEngine:
         state: OrchestratorState,
         validation_errors: list[str],
     ) -> None:
+        diff = self.git.diff()
+        logs = self._collect_relevant_logs(state)
+        review_packet = self.review_packet_builder.build(
+            task=task,
+            state=state,
+            diff=diff,
+            logs=logs,
+            validation_errors=validation_errors,
+            remaining_task_usd=max(0.0, task.max_cost_usd - state.estimated_cost_usd),
+            projected_review_usd=0.0,
+        )
+        state.tool_results["review_packet"] = review_packet.model_dump()
+        if self.config.diagnosis.enabled:
+            self._run_diagnosis_reviewer(task, state, review_packet)
         path = self.escalation.create_package(
             task=task,
             state=state,
-            diff=self.git.diff(),
+            diff=diff,
             logs=[
                 "diagnosis_needed: cheap builder is non-converging; "
                 "future diagnosis-only reviewer should inspect this package.",
-                *self._collect_relevant_logs(state),
+                *logs,
             ],
             validation_errors=validation_errors,
         )
@@ -452,6 +475,30 @@ class WorkflowEngine:
             if state.convergence_decision
             else {},
         )
+
+    def _run_diagnosis_reviewer(
+        self,
+        task: TaskSpec,
+        state: OrchestratorState,
+        review_packet: ReviewPacket,
+    ) -> None:
+        prompt = packet_to_prompt(review_packet)
+        estimate = self.budget.estimate_pre_call(
+            task=task,
+            attempt_id=len(state.attempt_metrics) + 1,
+            model_role=self.config.diagnosis.model_role,
+            context=prompt,
+        )
+        state.tool_results["diagnosis_budget_estimate"] = estimate.model_dump()
+        self.limits.check_pre_call(estimate)
+        self.budget.check_pre_call(task, estimate)
+        self.budget.record_estimate(estimate, status="estimated")
+        try:
+            diagnosis = self.diagnosis_reviewer.diagnose(review_packet)
+        except DiagnosisError as exc:
+            state.tool_results["diagnosis_error"] = str(exc)
+            raise
+        state.tool_results["diagnosis"] = diagnosis.model_dump()
 
     def _escalate_if_allowed(
         self,

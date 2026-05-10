@@ -61,6 +61,16 @@ convergence:
   hard_stop_on_syntax_regression: true
   hard_stop_on_unrelated_file_touch: true
 
+diagnosis:
+  enabled: false
+  dry_run: true
+  model_role: "expensive_reviewer"
+  max_packet_chars: 24000
+  max_diff_chars: 10000
+  max_stdout_chars: 4000
+  max_stderr_chars: 4000
+  allow_direct_patch: false
+
 # Sample prices are placeholders for local planning only.
 # Audit and update these values against official Google pricing before real paid usage.
 pricing:

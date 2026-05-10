@@ -1,6 +1,6 @@
 # Escalation Policy
 
-Status: planning only.
+Status: implemented through diagnosis-needed packages and a dry-run diagnosis interface.
 
 ## Philosophy
 
@@ -11,9 +11,9 @@ The orchestrator should escalate based on convergence collapse, divergence, risk
 ## Escalation Tiers
 
 1. Cheap retry with validator feedback.
-2. Cheap distillation of logs/context.
-3. Expensive diagnosis-only review.
-4. Human escalation.
+2. Deterministic compact review packet generation.
+3. Diagnosis-only reviewer interface, dry-run by default.
+4. Human escalation planning.
 
 ## Expensive Model Guardrails
 
@@ -24,6 +24,15 @@ allow_frontier_direct_patch: false
 expensive_model_diagnosis_only: true
 ```
 
+Current config:
+
+```yaml
+diagnosis:
+  enabled: false
+  dry_run: true
+  allow_direct_patch: false
+```
+
 Expensive direct patch generation should be disabled in Phase 1.5. If added later, it must require:
 
 - explicit human approval
@@ -31,6 +40,9 @@ Expensive direct patch generation should be disabled in Phase 1.5. If added late
 - narrow allowed files
 - strict patch validation
 - separate audit log entry
+
+No GPT/reviewer API call is made unless a future implementation explicitly adds
+one. The current dry-run interface records structured placeholder diagnosis only.
 
 ## Escalation Triggers
 
@@ -51,4 +63,3 @@ Escalate to human when:
 - expensive call budget exhausted
 - hard retry ceiling exceeded
 - forbidden path or unsafe behavior repeats
-

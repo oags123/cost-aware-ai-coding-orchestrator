@@ -1,10 +1,11 @@
 # Review Packet Specification
 
-Status: planning only.
+Status: implemented for deterministic packet building and dry-run diagnosis.
 
 ## Purpose
 
-Review packets are compact, structured inputs for expensive diagnosis/review. They should be built by the cheap model or deterministic summarizers before any expensive model call.
+Review packets are compact, structured inputs for expensive diagnosis/review.
+They are built deterministically before any diagnosis interface is called.
 
 The expensive model should never receive raw repo dumps.
 
@@ -47,14 +48,14 @@ question:
 
 ## Size Limits
 
-Proposed defaults:
+Implemented defaults:
 
 - max packet chars: 24000
 - max diff chars: 10000
 - max stdout chars: 4000
 - max stderr chars: 4000
-- max file snippets: 5
-- max snippet chars each: 2000
+
+The packet builder trims diff/stdout/stderr fields to keep packets bounded.
 
 ## Expensive Model Output Contract
 
@@ -73,3 +74,9 @@ confidence: 0.0
 
 No patch should be accepted from expensive model output unless direct patch mode is explicitly approved.
 
+Current runtime behavior:
+
+- `diagnosis.enabled: false` builds and stores the packet only.
+- `diagnosis.enabled: true` with `dry_run: true` records a structured placeholder diagnosis.
+- `diagnosis.enabled: true` with `dry_run: false` fails clearly because real reviewer APIs are not implemented.
+- direct patch output is rejected by policy.

@@ -71,6 +71,17 @@ class ConvergenceSettings(BaseModel):
     hard_stop_on_unrelated_file_touch: bool = True
 
 
+class DiagnosisSettings(BaseModel):
+    enabled: bool = False
+    dry_run: bool = True
+    model_role: str = "expensive_reviewer"
+    max_packet_chars: int = 24_000
+    max_diff_chars: int = 10_000
+    max_stdout_chars: int = 4_000
+    max_stderr_chars: int = 4_000
+    allow_direct_patch: bool = False
+
+
 class ModelPricing(BaseModel):
     provider: str
     model: str
@@ -173,6 +184,7 @@ class AppConfig(BaseModel):
     limits: LimitSettings = Field(default_factory=LimitSettings)
     inference: InferenceSettings = Field(default_factory=InferenceSettings)
     convergence: ConvergenceSettings = Field(default_factory=ConvergenceSettings)
+    diagnosis: DiagnosisSettings = Field(default_factory=DiagnosisSettings)
     pricing: PricingSettings = Field(default_factory=PricingSettings)
     validation: ValidationSettings = Field(default_factory=ValidationSettings)
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)

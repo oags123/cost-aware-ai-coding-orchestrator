@@ -164,6 +164,25 @@ class ValidationResult(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class ReviewPacket(BaseModel):
+    task: dict[str, Any]
+    budget: dict[str, Any] = Field(default_factory=dict)
+    attempts: dict[str, Any] = Field(default_factory=dict)
+    diff: dict[str, Any] = Field(default_factory=dict)
+    validation: dict[str, Any] = Field(default_factory=dict)
+    question: dict[str, Any] = Field(default_factory=dict)
+
+
+class DiagnosisResult(BaseModel):
+    root_cause: str
+    risk_assessment: str
+    recommended_next_instruction: str
+    files_to_focus: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    direct_patch_proposed: bool = False
+
+
 class EscalationPackage(BaseModel):
     task: TaskSpec
     state: OrchestratorState
