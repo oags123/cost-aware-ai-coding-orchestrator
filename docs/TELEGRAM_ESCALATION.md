@@ -1,12 +1,17 @@
-# Telegram Escalation Plan
+# Telegram Escalation
 
-Status: planning only.
+Status: Step 7A blocker/stop alerts are implemented and disabled by default.
+Approval modes remain future work.
 
-Telegram is a future human notification layer, not a task execution layer.
+Telegram is a human notification layer, not a task execution layer.
 
 ## Purpose
 
 Notify a human when automated cheap retries and diagnosis-only escalation are no longer safe or cost-effective.
+
+Current notifications cover blocker/stop conditions such as blocked tasks,
+budget exhaustion, runtime exhaustion, no runnable tasks, system errors, and
+human-attention escalation.
 
 ## Must Not Do
 
@@ -34,6 +39,8 @@ Suggested action: review diagnosis and approve another cheap retry or manual fix
 
 ## Approval Flow
 
+Not implemented.
+
 Telegram may eventually support structured approvals:
 
 - approve cheap retry
@@ -43,3 +50,8 @@ Telegram may eventually support structured approvals:
 
 It should not approve expensive direct patch generation by default.
 
+## Related Future Work
+
+- External watchdog and heartbeat for alerts even when the orchestrator crashes.
+- Robust persistent run/task state and `resume`.
+- Future SafeAuto policy that alerts only on real blockers or no progress.

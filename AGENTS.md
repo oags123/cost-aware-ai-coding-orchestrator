@@ -128,7 +128,7 @@ Use:
 
 ## Phase 1.5 planning context
 
-Phase 1.5 planning docs have been added under `docs/`. Steps 1-6 have been
+Phase 1.5 planning docs have been added under `docs/`. Steps 1-7A have been
 implemented:
 - persistent SQLite budget ledger and pre-call cost estimation
 - hard token/context/output/patch/stdout/stderr/validation-output limits
@@ -136,6 +136,7 @@ implemented:
 - deterministic convergence/divergence metrics for cheap retries
 - diagnosis-only review packet interface, dry-run by default
 - diagnosis-only expensive reviewer interface with structured guidance for cheap retries
+- Telegram blocker/stop alerts, disabled by default
 
 New architecture philosophy:
 - cheap model = builder/executor/distiller
@@ -203,6 +204,13 @@ Implemented Phase 1.5 Step 6 behavior:
 - expensive reviewer budget and per-task/per-run call gates
 - guided cheap retry using only `gemini_instruction` and compact diagnosis summary
 
+Implemented Phase 1.5 Step 7A behavior:
+- Telegram config fields and example config
+- environment-only bot token and chat id
+- notification-only blocker/stop alerts
+- no approval modes, no SafeAuto runtime behavior, and no model permission changes
+- future SafeAuto planning doc
+
 Current budget behavior:
 - pricing is config-driven by model role
 - pre-call estimates are made from actual context before model/OpenCode calls
@@ -248,6 +256,16 @@ Future SafeAuto status:
 - the future concept is documented in `docs/FUTURE_UNATTENDED_SAFE_AUTO.md`
 - SafeAuto would be orchestrator policy, not a Google, OpenAI, or OpenCode feature
 - OpenCode permissions remain separate from orchestrator governance
+
+Pending roadmap order:
+1. Real OpenCode/Gemini trial with one tiny, narrow task.
+2. Step 8: external watchdog and heartbeat.
+3. Step 9: robust SQLite run/task state and `resume`.
+4. Step 10: integration checkpoints and integration-fix task creation.
+5. Step 11: local caching strategy, with provider cache only as an optimization.
+6. Step 12: spec-to-tasks planner before the coding orchestrator.
+7. Provider usage accounting when actual token/cost data is available.
+8. Memory/retrieval and richer observability after persistent state is stable.
 
 ## Coding standards for this repo
 

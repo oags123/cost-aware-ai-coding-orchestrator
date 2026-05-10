@@ -12,6 +12,7 @@
 - logging and state files
 - escalation package generation
 - Docker scaffold
+- Telegram blocker/stop alerts, disabled by default
 - unit tests
 
 ## Complete But Needs Real-World Trial
@@ -21,6 +22,7 @@
 - safe patch application
 - git checkpoint/rollback
 - scoped task commits
+- Gemini Flex/Standard policy through the OpenCode builder path
 
 These are implemented and tested with mocks/temp repositories, but should be exercised with one carefully scoped real OpenCode task before broader use.
 
@@ -30,6 +32,7 @@ These are implemented and tested with mocks/temp repositories, but should be exe
 - accurate provider billing/cost accounting
 - specialized implementations for scaffolded workflows
 - long-term memory beyond simple project facts storage
+- unattended SafeAuto runtime behavior
 
 ## Deferred
 
@@ -39,10 +42,20 @@ These are implemented and tested with mocks/temp repositories, but should be exe
 - Gemini/provider integrations
 - embeddings/RAG/vector database
 - multi-agent conversation systems
+- Telegram approval modes
 
-## Phase 1.5 Planning Direction
+## Phase 1.5 Direction
 
-Phase 1.5 is planned as a cost-control and escalation-policy evolution, not a framework rewrite.
+Phase 1.5 is a cost-control and escalation-policy evolution, not a framework
+rewrite. Steps 1-7A are implemented. The remaining roadmap is:
+
+1. External watchdog and heartbeat.
+2. Robust SQLite run/task state and `resume`.
+3. Integration checkpoints.
+4. Local caching strategy.
+5. Spec-to-tasks planner.
+6. Provider usage accounting.
+7. Memory/retrieval and richer observability after persistent state is stable.
 
 The proposed role split is:
 
@@ -54,4 +67,4 @@ The proposed role split is:
 
 The default proposed policy is `allow_frontier_direct_patch = false`.
 
-See [Phase 1.5 Architecture](PHASE_1_5_ARCHITECTURE.md).
+See [Roadmap](ROADMAP.md) and [Phase 1.5 Architecture](PHASE_1_5_ARCHITECTURE.md).
