@@ -21,6 +21,31 @@ budget:
   max_task_cost_usd: 0.10
   max_project_cost_usd: 5.0
   stop_threshold_ratio: 0.9
+  ledger_path: "logs/budget.sqlite"
+  project_id: "default"
+  project_total_budget_usd: 5.0
+  cheap_builder_budget_usd: 3.0
+  expensive_reviewer_budget_usd: 1.0
+  emergency_budget_usd: 1.0
+
+# Sample prices are placeholders for local planning only.
+# Audit and update these values before real paid usage.
+pricing:
+  roles:
+    cheap_builder:
+      provider: "opencode"
+      model: "opencode-local"
+      input_usd_per_1m_tokens: 0.10
+      output_usd_per_1m_tokens: 0.40
+      max_output_tokens: 4000
+      budget_pool: "cheap_builder"
+    expensive_reviewer:
+      provider: "placeholder"
+      model: "frontier-reviewer-placeholder"
+      input_usd_per_1m_tokens: 5.00
+      output_usd_per_1m_tokens: 15.00
+      max_output_tokens: 1500
+      budget_pool: "expensive_reviewer"
 
 validation:
   max_files_changed: 5

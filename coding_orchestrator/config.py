@@ -21,6 +21,44 @@ class BudgetSettings(BaseModel):
     max_task_cost_usd: float = 0.10
     max_project_cost_usd: float = 5.0
     stop_threshold_ratio: float = 0.9
+    ledger_path: str = "logs/budget.sqlite"
+    project_id: str = "default"
+    project_total_budget_usd: float = 5.0
+    cheap_builder_budget_usd: float = 3.0
+    expensive_reviewer_budget_usd: float = 1.0
+    emergency_budget_usd: float = 1.0
+
+
+class ModelPricing(BaseModel):
+    provider: str
+    model: str
+    input_usd_per_1m_tokens: float
+    output_usd_per_1m_tokens: float
+    max_output_tokens: int
+    budget_pool: str
+
+
+class PricingSettings(BaseModel):
+    roles: dict[str, ModelPricing] = Field(
+        default_factory=lambda: {
+            "cheap_builder": ModelPricing(
+                provider="opencode",
+                model="opencode-local",
+                input_usd_per_1m_tokens=0.10,
+                output_usd_per_1m_tokens=0.40,
+                max_output_tokens=4000,
+                budget_pool="cheap_builder",
+            ),
+            "expensive_reviewer": ModelPricing(
+                provider="placeholder",
+                model="frontier-reviewer-placeholder",
+                input_usd_per_1m_tokens=5.00,
+                output_usd_per_1m_tokens=15.00,
+                max_output_tokens=1500,
+                budget_pool="expensive_reviewer",
+            ),
+        }
+    )
 
 
 class ValidationSettings(BaseModel):
@@ -79,6 +117,7 @@ class AppConfig(BaseModel):
     timeouts: TimeoutSettings = Field(default_factory=TimeoutSettings)
     retries: RetrySettings = Field(default_factory=RetrySettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
+    pricing: PricingSettings = Field(default_factory=PricingSettings)
     validation: ValidationSettings = Field(default_factory=ValidationSettings)
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)
     opencode: OpenCodeSettings = Field(default_factory=OpenCodeSettings)

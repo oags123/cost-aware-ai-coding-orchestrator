@@ -7,7 +7,7 @@ from uuid import uuid4
 from coding_orchestrator.config import AppConfig
 from coding_orchestrator.models.router import ModelRouter
 from coding_orchestrator.observability.logger import JsonlLogger
-from coding_orchestrator.orchestrator.budget import BudgetGuard
+from coding_orchestrator.orchestrator.budget import BudgetExceeded, BudgetGuard
 from coding_orchestrator.orchestrator.escalation import EscalationManager
 from coding_orchestrator.orchestrator.router import TaskClassifier
 from coding_orchestrator.orchestrator.state import StateStore
@@ -42,7 +42,13 @@ class WorkflowEngine:
         self.repo_path = Path(config.repo_path).resolve()
         self.classifier = TaskClassifier()
         self.model_router = ModelRouter(config.model_routing)
-        self.budget = BudgetGuard(config.budget)
+        budget_settings = config.budget
+        ledger_path = Path(budget_settings.ledger_path)
+        if not ledger_path.is_absolute():
+            budget_settings = budget_settings.model_copy(
+                update={"ledger_path": str((self.repo_path / ledger_path).resolve())}
+            )
+        self.budget = BudgetGuard(budget_settings, config.pricing)
         self.logger = JsonlLogger(Path(config.log_path))
         self.state_store = StateStore(Path(config.state_path))
         self.escalation = EscalationManager(Path("logs/escalations"))
@@ -96,6 +102,17 @@ class WorkflowEngine:
             self._rollback_if_checkpoint(checkpoint)
             self._escalate_if_allowed(task, state, validation_errors)
             return self._finish(state, "task_timeout")
+        except BudgetExceeded as exc:
+            state.final_status = "blocked"
+            validation_errors.append(str(exc))
+            self._rollback_if_checkpoint(checkpoint)
+            state.validation_results["budget"] = {
+                "name": "budget",
+                "passed": False,
+                "message": str(exc),
+                "details": state.tool_results.get("budget_estimate", {}),
+            }
+            return self._finish(state, "task_budget_blocked")
         except Exception as exc:
             state.final_status = "failed"
             validation_errors.append(str(exc))
@@ -156,6 +173,19 @@ class WorkflowEngine:
         if validation_errors:
             context += "\n\nPrevious validation feedback:\n" + self._compact_feedback(state)
         state.retrieved_context = [context]
+        estimate = self.budget.estimate_pre_call(
+            task=task,
+            attempt_id=state.retry_count + 1,
+            model_role="cheap_builder",
+            context=context,
+            model_override=state.selected_model or self.config.opencode.default_model,
+        )
+        state.estimated_input_tokens = estimate.estimated_input_tokens
+        state.estimated_output_tokens = estimate.estimated_output_tokens
+        state.estimated_cost_usd = estimate.estimated_total_cost_usd
+        state.tool_results["budget_estimate"] = estimate.model_dump()
+        self.budget.check_pre_call(task, estimate)
+        self.budget.record_estimate(estimate, status="estimated")
         runner = OpenCodeRunner(
             self.repo_path,
             state.selected_model or self.config.opencode.default_model,

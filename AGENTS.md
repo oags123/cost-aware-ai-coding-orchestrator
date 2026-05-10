@@ -120,7 +120,8 @@ Use:
 
 ## Phase 1.5 planning context
 
-Phase 1.5 planning docs have been added under `docs/`.
+Phase 1.5 planning docs have been added under `docs/`. Step 1 has been implemented:
+persistent SQLite budget ledger and pre-call cost estimation.
 
 New architecture philosophy:
 - cheap model = builder/executor/distiller
@@ -153,6 +154,18 @@ Planning docs:
 - `docs/FUTURE_PROVIDER_INTEGRATION.md`
 
 Do not implement Phase 1.5 runtime behavior until explicitly requested.
+
+Implemented Phase 1.5 Step 1 files:
+- `coding_orchestrator/orchestrator/budget.py`
+- `coding_orchestrator/config.py`
+- `tests/test_budget_ledger.py`
+
+Current budget behavior:
+- pricing is config-driven by model role
+- pre-call estimates are made from actual context before model/OpenCode calls
+- task, role-pool, and project budgets can block calls
+- ledger entries are persisted to SQLite
+- CLI `report` includes budget usage and blocked call count
 
 ## Coding standards for this repo
 

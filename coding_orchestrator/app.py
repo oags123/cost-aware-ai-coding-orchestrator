@@ -43,7 +43,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if all(result.passed for result in results) else 1
     if args.command == "report":
         report_states = engine.state_store.load_all()
-        payload = {key: value.model_dump(mode="json") for key, value in report_states.items()}
+        payload = {
+            "states": {key: value.model_dump(mode="json") for key, value in report_states.items()},
+            "budget": engine.budget.report().model_dump(mode="json"),
+        }
         print(json.dumps(payload, indent=2))
         return 0
     return 2

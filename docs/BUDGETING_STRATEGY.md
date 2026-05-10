@@ -1,29 +1,37 @@
 # Budgeting Strategy
 
-Status: planning only.
+Status: Step 1 implemented for SQLite ledger and pre-call estimates.
 
 ## Current State
 
-The MVP has approximate cost estimates and in-memory project spend. This is enough for dry-run and early local testing but not enough for real cost governance.
+The MVP now has approximate cost estimates plus persistent SQLite spend tracking. It still does not ingest provider-reported actual usage.
 
 ## Phase 1.5 Target
 
-Budget controls should become persistent, model-aware, and pre-call enforced.
+Budget controls are persistent, model-role aware, and pre-call enforced for the current builder call path.
 
 ## Budget Types
 
+Implemented:
+
 - task budget
-- attempt budget
 - project budget
-- expensive-model budget
-- escalation pool
+- cheap builder budget pool
+- expensive reviewer budget pool
+- emergency budget pool reporting
+
+Still planned:
+
+- attempt budget
+- expensive call count cap
 - daily/session cap
+- actual usage reconciliation
 
 ## Proposed Data Sources
 
 - static model pricing config for estimates
-- actual provider usage when available
-- persisted spend ledger for cross-run enforcement
+- persisted SQLite spend ledger for cross-run enforcement
+- actual provider usage when available in future
 
 ## Proposed Config
 
@@ -36,17 +44,26 @@ pricing:
 
 budget:
   max_task_cost_usd: 0.10
-  max_attempt_cost_usd: 0.03
-  max_project_cost_usd: 5.00
-  max_expensive_cost_per_task_usd: 0.25
-  max_expensive_calls_per_task: 1
+  ledger_path: "logs/budget.sqlite"
+  project_id: "default"
+  project_total_budget_usd: 5.00
+  cheap_builder_budget_usd: 3.00
+  expensive_reviewer_budget_usd: 1.00
+  emergency_budget_usd: 1.00
 ```
 
 ## Required Tests
 
-- blocks call when projected task budget is exceeded
-- blocks call when project budget is exceeded
-- blocks expensive call count above cap
-- persists spend across CLI runs
-- records budget-blocked state
+Implemented:
 
+- ledger persistence
+- estimate calculation
+- blocked call when projected task budget is exceeded
+- role-specific pool enforcement
+- project budget persistence across engine instances
+
+Still needed:
+
+- expensive call count cap
+- actual usage reconciliation
+- emergency pool behavior
