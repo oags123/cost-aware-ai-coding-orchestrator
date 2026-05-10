@@ -25,9 +25,51 @@ opencode models --refresh
 opencode models
 ```
 
+See [OpenCode Setup](OPENCODE_SETUP.md). The orchestrator does not silently
+fall back to dry-run when real mode is enabled.
+
+## OpenCode Returns Prose Instead Of A Patch
+
+The current patch contract accepts only a unified diff or JSON containing
+`patch`, `touched_files`, `summary`, and `confidence`. Free-form instructions
+are rejected.
+
+Use a smaller task, narrower `allowed_files`, and `output_mode: "unified_diff"`.
+Inspect `logs/orchestrator.jsonl` and `logs/state.json` for parser/validator
+messages.
+
+## Gemini Key Is Not Visible To OpenCode
+
+This repository does not call Gemini directly. If using Gemini through
+OpenCode, export the key and allow the orchestrator to forward it:
+
+```bash
+export GEMINI_API_KEY="..."
+```
+
+```yaml
+opencode:
+  allowed_env_vars:
+    - "GEMINI_API_KEY"
+```
+
+Also confirm OpenCode sees the provider:
+
+```bash
+opencode auth list
+opencode models --refresh
+opencode models
+```
+
 ## Docker Socket Permission Denied
 
 If Docker reports permission denied for `/var/run/docker.sock`, the current user cannot access Docker. Fix local Docker permissions before running compose commands.
+
+## Real OpenCode Mode In Docker
+
+The current project Dockerfile installs this Python package and Git. It does not
+install OpenCode or configure provider credentials. Use local venv execution for
+the first real task unless you explicitly extend the container setup.
 
 ## Telegram Alerts Do Not Send
 
@@ -85,3 +127,14 @@ Run each command directly:
 ```
 
 Inspect `logs/orchestrator.jsonl`, `logs/state.json`, and `logs/escalations/` for task-level context.
+
+## First Real Trial Fails
+
+Use [Real-World Trial Runbook](REAL_WORLD_TRIAL.md). Keep the first task tiny,
+use `git.require_clean_worktree: true`, and inspect:
+
+```bash
+git status --short
+git diff --stat
+.venv/bin/python -m coding_orchestrator.app report
+```

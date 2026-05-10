@@ -66,7 +66,11 @@ opencode:
     - "OPENAI_API_KEY"
 ```
 
-Install and authenticate OpenCode separately before enabling real mode. See the official CLI docs: <https://opencode.ai/docs/cli/>. The orchestrator invokes only `opencode run ...` with a bounded timeout and requires OpenCode output to be either a unified diff or structured JSON with `patch`, `touched_files`, `summary`, and `confidence`.
+Install and authenticate OpenCode separately before enabling real mode. See
+[OpenCode Setup](docs/OPENCODE_SETUP.md). The orchestrator invokes only
+`opencode run ...` with a bounded timeout and requires OpenCode output to be
+either a unified diff or structured JSON with `patch`, `touched_files`,
+`summary`, and `confidence`.
 
 Use `opencode auth login` and `opencode models --refresh` / `opencode models` to configure providers and find the exact `provider/model` string before enabling real mode.
 
@@ -87,6 +91,10 @@ docker compose run orchestrator python -m coding_orchestrator.app run-all --task
 ```
 
 The container runs as a non-root user and mounts the project plus persistent `logs/`. Docker validation requires the current user to have access to the Docker socket. If `docker compose build` reports permission denied for `/var/run/docker.sock`, fix local Docker permissions before testing the container.
+
+Docker is not required for the first real OpenCode trial. The current Dockerfile
+does not install OpenCode or provider credentials; prefer local venv execution
+for the first real task.
 
 ## Validation
 
@@ -128,11 +136,13 @@ Codex repository instructions live in `AGENTS.md`; the official Codex CLI docs d
 ## More Documentation
 
 - [Quickstart](docs/QUICKSTART.md)
+- [User Guide](docs/USER_GUIDE.md)
+- [Real-World Trial Runbook](docs/REAL_WORLD_TRIAL.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Tasks](docs/TASKS.md)
 - [Safety](docs/SAFETY.md)
-- [OpenCode Setup](docs/OPEN_CODE_SETUP.md)
+- [OpenCode Setup](docs/OPENCODE_SETUP.md)
 - [Development](docs/DEVELOPMENT.md)
 - [MVP Status](docs/MVP_STATUS.md)
 - [Roadmap](docs/ROADMAP.md)

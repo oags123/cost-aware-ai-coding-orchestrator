@@ -24,6 +24,9 @@ Config is YAML and loaded from `config.yaml` by default. If no config file exist
 
 ## OpenCode Settings
 
+OpenCode is installed and authenticated separately from this package. See
+[OpenCode Setup](OPENCODE_SETUP.md).
+
 ```yaml
 opencode:
   enabled: false
@@ -39,6 +42,18 @@ opencode:
 Real mode requires both `enabled: true` and `dry_run: false`.
 
 Only environment variables listed in `allowed_env_vars` are forwarded to OpenCode, in addition to basic process environment like `PATH` and `HOME`.
+
+For Gemini through OpenCode:
+
+```yaml
+opencode:
+  allowed_env_vars:
+    - "GEMINI_API_KEY"
+```
+
+The `default_model` value must be the exact `provider/model` string reported by
+`opencode models`. The built-in pricing defaults are planning estimates and do
+not prove that the model is available in your OpenCode installation.
 
 ## Budget, Pricing, and Limits
 
@@ -118,6 +133,10 @@ inference:
 Flex pricing/model entries are separate from Standard entries. Keep both
 config-driven and audit them against current Google pricing before real use.
 The builder tier policy does not add a GPT fallback.
+
+Flex/Standard are represented in this project as policy and pricing entries for
+the OpenCode builder path. This repository does not call the Gemini API
+directly.
 
 ## Diagnosis Settings
 

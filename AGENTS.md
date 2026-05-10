@@ -251,6 +251,13 @@ Current Telegram behavior:
 - alerts cover blocker/stop conditions such as blocked tasks, budget exhaustion, runtime exhaustion, no runnable tasks, system errors, and escalation
 - Telegram is notification-only; it does not approve, resume, or change runs
 
+Current operator setup docs:
+- `docs/USER_GUIDE.md` is the owner/operator setup guide for the current MVP
+- `docs/REAL_WORLD_TRIAL.md` is the first real OpenCode runbook
+- `docs/OPENCODE_SETUP.md` is the canonical OpenCode/Gemini setup guide
+- `docs/OPEN_CODE_SETUP.md` is a compatibility pointer only
+- Docker is optional and is not the recommended first real OpenCode trial path because the current Dockerfile does not install OpenCode or provider credentials
+
 Future SafeAuto status:
 - `safe_auto` / `unattended_safe_auto` is not implemented
 - the future concept is documented in `docs/FUTURE_UNATTENDED_SAFE_AUTO.md`
