@@ -45,3 +45,19 @@ Implement the user service behavior described here.
 
 `run-all` loads task files from a directory, orders them by dependencies, skips blocked tasks, and executes one task at a time.
 
+## Retry And Convergence
+
+Each failed attempt records deterministic metrics:
+
+- failing validation commands
+- validator error count
+- changed file count
+- patch size
+- builder stdout/stderr size
+- failure categories such as syntax, mypy, ruff, pytest, and patch
+- repeated vs new failure signatures
+
+The task continues cheap retries only while attempts are converging or remain
+inside configured stagnation/divergence thresholds. If the task becomes
+non-converging, the engine rolls back and writes a `diagnosis_needed` escalation
+package for future diagnosis-only review. No reviewer model is called yet.

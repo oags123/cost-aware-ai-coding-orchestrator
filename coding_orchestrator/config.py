@@ -61,6 +61,16 @@ class InferenceSettings(BaseModel):
     cheap_builder: CheapBuilderTierSettings = Field(default_factory=CheapBuilderTierSettings)
 
 
+class ConvergenceSettings(BaseModel):
+    max_stagnant_attempts: int = 2
+    max_divergent_attempts: int = 1
+    max_patch_growth_ratio: float = 1.5
+    max_failure_growth_ratio: float = 1.25
+    min_improvement_score_to_continue: float = -1.0
+    hard_stop_on_syntax_regression: bool = True
+    hard_stop_on_unrelated_file_touch: bool = True
+
+
 class ModelPricing(BaseModel):
     provider: str
     model: str
@@ -162,6 +172,7 @@ class AppConfig(BaseModel):
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
     inference: InferenceSettings = Field(default_factory=InferenceSettings)
+    convergence: ConvergenceSettings = Field(default_factory=ConvergenceSettings)
     pricing: PricingSettings = Field(default_factory=PricingSettings)
     validation: ValidationSettings = Field(default_factory=ValidationSettings)
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)

@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = {
             "states": {key: value.model_dump(mode="json") for key, value in report_states.items()},
             "budget": engine.budget_report().model_dump(mode="json"),
+            "convergence": engine.convergence_report(),
         }
         print(json.dumps(payload, indent=2))
         return 0

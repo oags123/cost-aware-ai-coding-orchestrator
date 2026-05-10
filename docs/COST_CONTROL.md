@@ -2,7 +2,7 @@
 
 Status: Step 1, Step 2, and Step 3 implemented for persistent budget ledger,
 pre-call estimation, hard size limits, and Gemini Flex/Standard builder tier
-policy.
+policy, and convergence/divergence metrics.
 
 ## Optimization Target
 
@@ -30,12 +30,33 @@ Implemented controls:
 - controlled Gemini Standard fallback after Flex timeout policy triggers
 - per-run Standard fallback count and cost caps
 - report fields for calls/cost by tier, Flex timeouts, and Standard fallbacks
+- attempt metrics for validator errors, failing tests, patch size, stream size, and changed files
+- convergence/stagnation/divergence decisions before spending more cheap-builder retries
+- `diagnosis_needed` package generation when cheap retries stop improving
 
 Still planned:
 
 - max expensive-model calls per task
 - max review packet chars
 - emergency budget behavior beyond reporting
+
+## Cheap Retry Cost Control
+
+Convergence evaluation is part of cost control. The orchestrator continues
+cheap retries only while deterministic metrics show improvement or remain
+within configured thresholds. It stops cheap retries and creates a
+`diagnosis_needed` package when attempts stagnate or diverge.
+
+```yaml
+convergence:
+  max_stagnant_attempts: 2
+  max_divergent_attempts: 1
+  max_patch_growth_ratio: 1.5
+  max_failure_growth_ratio: 1.25
+  min_improvement_score_to_continue: -1.0
+  hard_stop_on_syntax_regression: true
+  hard_stop_on_unrelated_file_touch: true
+```
 
 ## Pre-Call Estimation
 

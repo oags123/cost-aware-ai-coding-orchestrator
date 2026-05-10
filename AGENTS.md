@@ -22,6 +22,7 @@ Complete:
 - persistent SQLite budget ledger and pre-call cost estimation
 - hard token, context, output, patch, stdout/stderr, and validation output limits
 - Gemini Flex/Standard cheap builder tier policy with bounded Standard fallback
+- convergence/divergence attempt metrics with diagnosis-needed escalation packages
 - unit tests for core safety and workflow paths
 
 Placeholder or intentionally limited:
@@ -123,11 +124,12 @@ Use:
 
 ## Phase 1.5 planning context
 
-Phase 1.5 planning docs have been added under `docs/`. Step 1 and Step 2 have
-been implemented:
+Phase 1.5 planning docs have been added under `docs/`. Steps 1-4 have been
+implemented:
 - persistent SQLite budget ledger and pre-call cost estimation
 - hard token/context/output/patch/stdout/stderr/validation-output limits
 - Gemini Flex default builder tier with controlled Standard fallback
+- deterministic convergence/divergence metrics for cheap retries
 
 New architecture philosophy:
 - cheap model = builder/executor/distiller
@@ -176,6 +178,12 @@ Implemented Phase 1.5 Step 3 files:
 - `tests/test_tier_policy.py`
 - tier-aware budget ledger/report wiring in `coding_orchestrator/orchestrator/budget.py`
 
+Implemented Phase 1.5 Step 4 files:
+- `coding_orchestrator/orchestrator/convergence.py`
+- `tests/test_convergence.py`
+- attempt metric state fields in `coding_orchestrator/schemas.py`
+- retry-loop decision wiring in `coding_orchestrator/orchestrator/engine.py`
+
 Current budget behavior:
 - pricing is config-driven by model role
 - pre-call estimates are made from actual context before model/OpenCode calls
@@ -197,6 +205,13 @@ Current tier behavior:
 - Standard fallback is capped by per-run count and estimated cost
 - builder work must not fall back to GPT-5.5 or other frontier models
 - CLI `report` includes calls/cost by tier, Flex timeouts, and Standard fallbacks
+
+Current convergence behavior:
+- every attempt records validation status, failing test count, validator error count, changed file count, patch size, stream sizes, failure categories, repeated failures, and new failures
+- convergence/stagnation/divergence is deterministic and config-driven
+- hard stops can trigger on syntax regression or unrelated file touches
+- non-converging tasks create `diagnosis_needed` escalation packages
+- no GPT/reviewer call is made for diagnosis yet
 
 ## Coding standards for this repo
 

@@ -52,6 +52,15 @@ inference:
     max_standard_fallbacks_per_run: 1
     max_standard_fallback_cost_usd_per_run: 0.25
 
+convergence:
+  max_stagnant_attempts: 2
+  max_divergent_attempts: 1
+  max_patch_growth_ratio: 1.5
+  max_failure_growth_ratio: 1.25
+  min_improvement_score_to_continue: -1.0
+  hard_stop_on_syntax_regression: true
+  hard_stop_on_unrelated_file_touch: true
+
 # Sample prices are placeholders for local planning only.
 # Audit and update these values against official Google pricing before real paid usage.
 pricing:

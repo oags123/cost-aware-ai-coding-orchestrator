@@ -13,6 +13,7 @@ from coding_orchestrator.orchestrator.budget import (
     BudgetGuard,
     BudgetUsage,
 )
+from coding_orchestrator.orchestrator.convergence import ConvergenceEvaluator
 from coding_orchestrator.orchestrator.escalation import EscalationManager
 from coding_orchestrator.orchestrator.limits import LimitExceeded, LimitGuard
 from coding_orchestrator.orchestrator.router import TaskClassifier
@@ -22,6 +23,7 @@ from coding_orchestrator.orchestrator.timeouts import TimeoutExceeded, TimeoutGu
 from coding_orchestrator.orchestrator.workflows import WORKFLOWS
 from coding_orchestrator.schemas import (
     BuilderResult,
+    ConvergenceDecision,
     OrchestratorState,
     TaskSpec,
     ValidationResult,
@@ -59,6 +61,7 @@ class WorkflowEngine:
         self.budget = BudgetGuard(budget_settings, config.pricing)
         self.limits = LimitGuard(config.limits)
         self.tier_policy = CheapBuilderTierPolicy(config.inference.cheap_builder)
+        self.convergence = ConvergenceEvaluator(config.convergence)
         self.logger = JsonlLogger(Path(config.log_path))
         self.state_store = StateStore(Path(config.state_path))
         self.escalation = EscalationManager(Path("logs/escalations"))
@@ -97,17 +100,27 @@ class WorkflowEngine:
                 ):
                     self._record_limit_failure(state, "validation_output_limit_exceeded")
                 if not validation_errors:
+                    self._record_attempt_metrics(task, state, results)
                     self._commit(task, state)
                     state.final_status = "completed"
                     self.budget.record(state)
                     return self._finish(state, "task_completed")
+                decision = self._record_attempt_metrics(task, state, results)
                 self.logger.log(
                     "validation_failed",
                     request_id=state.request_id,
                     task_id=task.id,
                     errors=validation_errors,
                     retry=state.retry_count,
+                    convergence=decision.model_dump(),
                 )
+                if decision.action in {
+                    "request_diagnosis",
+                    "pause_block_task",
+                    "mark_non_converging",
+                }:
+                    self._handle_non_converging(task, state, validation_errors, checkpoint)
+                    return state
                 state.retry_count += 1
             self._handle_failure(task, state, validation_errors, checkpoint)
             return state
@@ -175,6 +188,9 @@ class WorkflowEngine:
             flex_timeouts=self.tier_policy.state.flex_timeouts,
             standard_fallbacks=self.tier_policy.state.standard_fallbacks,
         )
+
+    def convergence_report(self) -> dict[str, object]:
+        return self.convergence.report()
 
     def _initial_state(self, task: TaskSpec) -> OrchestratorState:
         complexity = self.classifier.classify_complexity(task)
@@ -343,6 +359,35 @@ class WorkflowEngine:
         if result.returncode != 0:
             raise CommitFailed(result.stderr or result.stdout or "git commit failed")
 
+    def _record_attempt_metrics(
+        self,
+        task: TaskSpec,
+        state: OrchestratorState,
+        results: list[ValidationResult],
+    ) -> ConvergenceDecision:
+        previous = state.attempt_metrics[-1] if state.attempt_metrics else None
+        metrics = self.convergence.collect_attempt_metrics(
+            attempt_number=state.retry_count + 1,
+            validation_results=results,
+            changed_files=self.git.changed_files(),
+            allowed_files=task.allowed_files,
+            tool_results=state.tool_results,
+            previous=previous,
+        )
+        decision = self.convergence.evaluate(metrics, previous)
+        state.attempt_metrics.append(metrics)
+        state.convergence_status = decision.status
+        state.convergence_decision = decision
+        state.tool_results["convergence"] = decision.model_dump()
+        self.logger.log(
+            "attempt_metrics",
+            request_id=state.request_id,
+            task_id=task.id,
+            metrics=metrics.model_dump(),
+            convergence=decision.model_dump(),
+        )
+        return decision
+
     def _handle_failure(
         self,
         task: TaskSpec,
@@ -360,6 +405,53 @@ class WorkflowEngine:
         else:
             state.final_status = "failed"
         self._finish(state, state.final_status)
+
+    def _handle_non_converging(
+        self,
+        task: TaskSpec,
+        state: OrchestratorState,
+        validation_errors: list[str],
+        checkpoint: GitCheckpoint,
+    ) -> None:
+        self.git.rollback_to_checkpoint(
+            checkpoint,
+            self.config.git.preserve_untracked_dirs,
+            self.config.git.preserve_untracked_files,
+        )
+        if state.convergence_status == "diverging":
+            state.final_status = "blocked"
+        else:
+            state.final_status = "escalated"
+        self._create_diagnosis_needed_package(task, state, validation_errors)
+        self._finish(state, "diagnosis_needed")
+
+    def _create_diagnosis_needed_package(
+        self,
+        task: TaskSpec,
+        state: OrchestratorState,
+        validation_errors: list[str],
+    ) -> None:
+        path = self.escalation.create_package(
+            task=task,
+            state=state,
+            diff=self.git.diff(),
+            logs=[
+                "diagnosis_needed: cheap builder is non-converging; "
+                "future diagnosis-only reviewer should inspect this package.",
+                *self._collect_relevant_logs(state),
+            ],
+            validation_errors=validation_errors,
+        )
+        state.tool_results["diagnosis_needed_package"] = str(path)
+        self.logger.log(
+            "diagnosis_needed",
+            request_id=state.request_id,
+            task_id=task.id,
+            path=str(path),
+            convergence=state.convergence_decision.model_dump()
+            if state.convergence_decision
+            else {},
+        )
 
     def _escalate_if_allowed(
         self,
