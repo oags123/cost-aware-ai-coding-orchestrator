@@ -74,7 +74,17 @@ class ConvergenceSettings(BaseModel):
 class DiagnosisSettings(BaseModel):
     enabled: bool = False
     dry_run: bool = True
+    provider: str = "placeholder"
+    model: str = "frontier-reviewer-placeholder"
     model_role: str = "expensive_reviewer"
+    max_input_tokens: int = 8_000
+    max_output_tokens: int = 1_500
+    max_context_chars: int = 24_000
+    max_cost_per_call_usd: float = 0.25
+    max_calls_per_task: int = 1
+    max_calls_per_run: int = 2
+    role_budget_pool: str = "expensive_reviewer"
+    diagnosis_only: bool = True
     max_packet_chars: int = 24_000
     max_diff_chars: int = 10_000
     max_stdout_chars: int = 4_000

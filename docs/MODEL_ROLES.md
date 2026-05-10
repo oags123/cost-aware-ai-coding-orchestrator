@@ -1,6 +1,6 @@
 # Model Roles Specification
 
-Status: planning only.
+Status: implemented for cheap builder routing and diagnosis-only reviewer guardrails.
 
 ## Cheap Model
 
@@ -50,6 +50,16 @@ Must not:
 - generate huge outputs by default
 - produce patches unless explicitly approved by a human and budget gate
 
+Current reviewer contract:
+
+- structured diagnosis only
+- no unified diffs
+- no file writes
+- no shell commands
+- no large code blocks
+- no direct patches
+- only `gemini_instruction` and compact diagnosis summary may feed the next cheap retry
+
 ## Proposed Config
 
 ```yaml
@@ -66,11 +76,16 @@ model_roles:
     max_output_tokens: 2000
   expensive_reviewer:
     enabled: false
+    provider: placeholder
+    model: frontier-reviewer-placeholder
     diagnosis_only: true
     allow_direct_patch: false
     max_calls_per_task: 1
+    max_calls_per_run: 2
     max_input_tokens: 8000
     max_output_tokens: 1500
+    max_context_chars: 24000
+    max_cost_per_call_usd: 0.25
 ```
 
 ## Test Expectations
@@ -79,4 +94,3 @@ model_roles:
 - Expensive reviewer is never selected for patch generation by default.
 - Expensive call is blocked if projected cost exceeds remaining budget.
 - Expensive output is treated as guidance, not automatically applied code.
-

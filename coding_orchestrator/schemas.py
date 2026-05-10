@@ -175,11 +175,14 @@ class ReviewPacket(BaseModel):
 
 class DiagnosisResult(BaseModel):
     root_cause: str
-    risk_assessment: str
-    recommended_next_instruction: str
+    minimal_fix_strategy: str = ""
     files_to_focus: list[str] = Field(default_factory=list)
-    avoid: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    gemini_instruction: str = ""
     confidence: float = 0.0
+    should_retry_with_cheap_builder: bool = False
+    risk_assessment: str = ""
+    recommended_next_instruction: str = ""
     direct_patch_proposed: bool = False
 
 

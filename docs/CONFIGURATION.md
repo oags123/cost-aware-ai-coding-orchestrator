@@ -128,7 +128,17 @@ reviewer API calls are not implemented yet.
 diagnosis:
   enabled: false
   dry_run: true
+  provider: "placeholder"
+  model: "frontier-reviewer-placeholder"
   model_role: "expensive_reviewer"
+  max_input_tokens: 8000
+  max_output_tokens: 1500
+  max_context_chars: 24000
+  max_cost_per_call_usd: 0.25
+  max_calls_per_task: 1
+  max_calls_per_run: 2
+  role_budget_pool: "expensive_reviewer"
+  diagnosis_only: true
   max_packet_chars: 24000
   max_diff_chars: 10000
   max_stdout_chars: 4000

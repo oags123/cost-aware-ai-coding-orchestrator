@@ -24,6 +24,7 @@ Complete:
 - Gemini Flex/Standard cheap builder tier policy with bounded Standard fallback
 - convergence/divergence attempt metrics with diagnosis-needed escalation packages
 - diagnosis-only review packet builder and dry-run reviewer interface
+- expensive reviewer diagnosis contract, budget gates, and call limits
 - unit tests for core safety and workflow paths
 
 Placeholder or intentionally limited:
@@ -125,13 +126,14 @@ Use:
 
 ## Phase 1.5 planning context
 
-Phase 1.5 planning docs have been added under `docs/`. Steps 1-5 have been
+Phase 1.5 planning docs have been added under `docs/`. Steps 1-6 have been
 implemented:
 - persistent SQLite budget ledger and pre-call cost estimation
 - hard token/context/output/patch/stdout/stderr/validation-output limits
 - Gemini Flex default builder tier with controlled Standard fallback
 - deterministic convergence/divergence metrics for cheap retries
 - diagnosis-only review packet interface, dry-run by default
+- diagnosis-only expensive reviewer interface with structured guidance for cheap retries
 
 New architecture philosophy:
 - cheap model = builder/executor/distiller
@@ -192,6 +194,13 @@ Implemented Phase 1.5 Step 5 files:
 - review packet and diagnosis result schemas in `coding_orchestrator/schemas.py`
 - diagnosis-only wiring in `coding_orchestrator/orchestrator/engine.py`
 
+Implemented Phase 1.5 Step 6 behavior:
+- reviewer config for provider/model/token/context/cost/call limits
+- diagnosis-only response contract validation
+- rejection of diffs, shell commands, file writes, large code blocks, and direct patches
+- expensive reviewer budget and per-task/per-run call gates
+- guided cheap retry using only `gemini_instruction` and compact diagnosis summary
+
 Current budget behavior:
 - pricing is config-driven by model role
 - pre-call estimates are made from actual context before model/OpenCode calls
@@ -221,6 +230,7 @@ Current convergence behavior:
 - non-converging tasks create `diagnosis_needed` escalation packages
 - diagnosis packages include compact review packets
 - optional diagnosis dry-run records structured placeholder guidance
+- enabled diagnosis can feed bounded guidance into the next cheap-builder retry
 - no real GPT/reviewer API call is implemented yet
 - direct expensive-model patches remain disabled by policy
 

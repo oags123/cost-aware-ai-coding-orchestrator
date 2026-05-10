@@ -1,6 +1,7 @@
 # Review Packet Specification
 
-Status: implemented for deterministic packet building and dry-run diagnosis.
+Status: implemented for deterministic packet building and a diagnosis-only
+expensive reviewer interface, dry-run by default.
 
 ## Purpose
 
@@ -63,20 +64,30 @@ Diagnosis-only response:
 
 ```yaml
 root_cause: ...
-risk_assessment: ...
-recommended_next_instruction: ...
+minimal_fix_strategy: ...
 files_to_focus:
   - path.py
-avoid:
-  - broad refactor
+risks:
+  - keep scope narrow
+gemini_instruction: ...
 confidence: 0.0
+should_retry_with_cheap_builder: true
 ```
 
 No patch should be accepted from expensive model output unless direct patch mode is explicitly approved.
+
+Rejected reviewer output:
+
+- unified diffs
+- file write/delete instructions
+- shell commands
+- large code blocks
+- direct patch proposals
 
 Current runtime behavior:
 
 - `diagnosis.enabled: false` builds and stores the packet only.
 - `diagnosis.enabled: true` with `dry_run: true` records a structured placeholder diagnosis.
 - `diagnosis.enabled: true` with `dry_run: false` fails clearly because real reviewer APIs are not implemented.
+- if accepted, only `gemini_instruction`, strategy summary, and files to focus feed the next cheap-builder retry.
 - direct patch output is rejected by policy.

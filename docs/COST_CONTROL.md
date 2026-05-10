@@ -33,6 +33,9 @@ Implemented controls:
 - attempt metrics for validator errors, failing tests, patch size, stream size, and changed files
 - convergence/stagnation/divergence decisions before spending more cheap-builder retries
 - `diagnosis_needed` package generation when cheap retries stop improving
+- expensive reviewer per-call cost cap
+- expensive reviewer max calls per task and per run
+- expensive reviewer budget-pool enforcement before diagnosis calls
 
 Still planned:
 
@@ -202,6 +205,31 @@ pricing:
 ```
 
 Sample prices are placeholders and must be audited before real paid usage.
+
+## Expensive Reviewer Controls
+
+The expensive reviewer is diagnosis-only and disabled by default:
+
+```yaml
+diagnosis:
+  enabled: false
+  provider: "placeholder"
+  model: "frontier-reviewer-placeholder"
+  max_input_tokens: 8000
+  max_output_tokens: 1500
+  max_context_chars: 24000
+  max_cost_per_call_usd: 0.25
+  max_calls_per_task: 1
+  max_calls_per_run: 2
+  role_budget_pool: "expensive_reviewer"
+  diagnosis_only: true
+  allow_direct_patch: false
+```
+
+Before any enabled reviewer call, the orchestrator estimates tokens/cost, checks
+the expensive reviewer budget pool, and enforces per-task/per-run call caps. If
+any check fails, it creates a `diagnosis_needed` package and does not call the
+reviewer.
 
 ## Failure Behavior
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from coding_orchestrator.config import DiagnosisSettings
@@ -8,6 +9,18 @@ from coding_orchestrator.schemas import DiagnosisResult, OrchestratorState, Revi
 
 class DiagnosisError(RuntimeError):
     pass
+
+
+FORBIDDEN_DIAGNOSIS_PATTERNS = (
+    re.compile(r"^diff --git ", re.MULTILINE),
+    re.compile(r"^--- .*\n\+\+\+ ", re.MULTILINE),
+    re.compile(r"\b(write|overwrite|delete|create)\s+file\b", re.IGNORECASE),
+    re.compile(
+        r"\b(run|execute)\s+(pytest|ruff|mypy|git|python|sh|bash|curl|sudo)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"```(?:python|diff|bash|sh)?\n.{500,}?```", re.DOTALL | re.IGNORECASE),
+)
 
 
 @dataclass
@@ -63,7 +76,8 @@ class ReviewPacketBuilder:
                 "type": "diagnosis",
                 "prompt": (
                     "What is the most likely root cause and next cheap-builder instruction? "
-                    "Do not produce a patch."
+                    "Return structured diagnosis only. Do not produce a patch, shell command, "
+                    "file write, or code block."
                 ),
             },
         )
@@ -77,23 +91,45 @@ class DiagnosisReviewer:
     def diagnose(self, packet: ReviewPacket) -> DiagnosisResult:
         if not self.settings.enabled:
             raise DiagnosisError("diagnosis reviewer is disabled")
+        if not self.settings.diagnosis_only:
+            raise DiagnosisError("expensive reviewer must remain diagnosis_only")
+        if self.settings.allow_direct_patch:
+            raise DiagnosisError("direct expensive-reviewer patches are disabled")
         if not self.settings.dry_run:
             raise DiagnosisError("real diagnosis reviewer integration is not implemented")
         result = DiagnosisResult(
             root_cause="Dry-run diagnosis placeholder: inspect validator failures and latest diff.",
-            risk_assessment="No real reviewer call was made; treat this as a routing artifact.",
-            recommended_next_instruction=(
-                "Use the review packet to craft a narrower cheap-builder retry instruction."
+            minimal_fix_strategy=(
+                "Focus the next cheap-builder attempt on the current failing validators."
             ),
             files_to_focus=list(packet.task.get("allowed_files", [])),
-            avoid=["direct expensive-model patch generation", "broad refactor"],
+            risks=["Dry-run diagnosis only; no provider reviewed this packet."],
+            gemini_instruction=(
+                "Use the validation failures and allowed files only. Produce the smallest patch "
+                "that addresses the current failing validator output."
+            ),
             confidence=0.4,
+            should_retry_with_cheap_builder=True,
+            risk_assessment="No real reviewer call was made; treat this as a routing artifact.",
+            recommended_next_instruction=(
+                "Use the validation failures and allowed files only. Produce the smallest patch "
+                "that addresses the current failing validator output."
+            ),
         )
-        if result.direct_patch_proposed and not self.settings.allow_direct_patch:
-            raise DiagnosisError(
-                "diagnosis reviewer proposed a patch but direct patches are disabled"
-            )
-        return result
+        return validate_diagnosis_result(result, self.settings)
+
+
+def validate_diagnosis_result(
+    result: DiagnosisResult,
+    settings: DiagnosisSettings,
+) -> DiagnosisResult:
+    if result.direct_patch_proposed or settings.allow_direct_patch:
+        raise DiagnosisError("direct expensive-reviewer patches are disabled")
+    text = result.model_dump_json()
+    for pattern in FORBIDDEN_DIAGNOSIS_PATTERNS:
+        if pattern.search(text):
+            raise DiagnosisError("diagnosis reviewer output violates diagnosis-only contract")
+    return result
 
 
 def packet_to_prompt(packet: ReviewPacket) -> str:

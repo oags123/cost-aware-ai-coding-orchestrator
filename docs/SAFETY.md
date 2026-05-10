@@ -35,6 +35,29 @@ Real OpenCode mode accepts only:
 
 Free-form instructions are rejected.
 
+## Expensive Reviewer Contract
+
+The expensive reviewer is diagnosis-only. Its output must be structured and may
+contain only:
+
+- root cause
+- minimal fix strategy
+- files to focus
+- risks
+- Gemini/cheap-builder instruction
+- confidence
+- whether to retry with the cheap builder
+
+Reviewer output is rejected if it contains:
+
+- unified diffs
+- file write/delete instructions
+- shell commands
+- large code blocks
+- direct patch proposals
+
+The reviewer cannot modify files and its output is never applied as code.
+
 ## Patch Application
 
 Before applying, the patch layer checks:

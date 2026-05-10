@@ -71,6 +71,8 @@ class WorkflowEngine:
         self.convergence = ConvergenceEvaluator(config.convergence)
         self.review_packet_builder = ReviewPacketBuilder(config.diagnosis)
         self.diagnosis_reviewer = DiagnosisReviewer(config.diagnosis)
+        self.reviewer_calls_this_run = 0
+        self.reviewer_calls_by_task: dict[str, int] = {}
         self.logger = JsonlLogger(Path(config.log_path))
         self.state_store = StateStore(Path(config.state_path))
         self.escalation = EscalationManager(Path("logs/escalations"))
@@ -128,7 +130,9 @@ class WorkflowEngine:
                     "pause_block_task",
                     "mark_non_converging",
                 }:
-                    self._handle_non_converging(task, state, validation_errors, checkpoint)
+                    if self._handle_non_converging(task, state, validation_errors, checkpoint):
+                        state.retry_count += 1
+                        continue
                     return state
                 state.retry_count += 1
             self._handle_failure(task, state, validation_errors, checkpoint)
@@ -236,6 +240,9 @@ class WorkflowEngine:
         context = workflow.build_context(task, state)
         if validation_errors:
             context += "\n\nPrevious validation feedback:\n" + self._compact_feedback(state)
+        guidance = self._diagnosis_guidance(state)
+        if guidance:
+            context += "\n\nDiagnosis-only reviewer guidance for cheap retry:\n" + guidance
         try:
             context = self.limits.prepare_context(context)
         except LimitExceeded:
@@ -421,39 +428,87 @@ class WorkflowEngine:
         state: OrchestratorState,
         validation_errors: list[str],
         checkpoint: GitCheckpoint,
-    ) -> None:
+    ) -> bool:
         self.git.rollback_to_checkpoint(
             checkpoint,
             self.config.git.preserve_untracked_dirs,
             self.config.git.preserve_untracked_files,
         )
+        if (
+            state.convergence_decision
+            and state.convergence_decision.action == "request_diagnosis"
+            and self.config.diagnosis.enabled
+        ):
+            review_packet = self._build_review_packet(task, state, validation_errors)
+            state.tool_results["review_packet"] = review_packet.model_dump()
+            try:
+                self._run_diagnosis_reviewer(task, state, review_packet)
+            except (BudgetExceeded, LimitExceeded, DiagnosisError) as exc:
+                state.tool_results["diagnosis_error"] = str(exc)
+                if isinstance(exc, BudgetExceeded):
+                    state.validation_results["budget"] = {
+                        "name": "budget",
+                        "passed": False,
+                        "message": str(exc),
+                        "details": state.tool_results.get("diagnosis_budget_estimate", {}),
+                    }
+                    state.final_status = "blocked"
+                self._create_diagnosis_needed_package(task, state, validation_errors, review_packet)
+                self._finish(state, "diagnosis_needed")
+                return False
+            diagnosis = state.tool_results.get("diagnosis", {})
+            if (
+                isinstance(diagnosis, dict)
+                and diagnosis.get("should_retry_with_cheap_builder")
+                and state.retry_count + 1 < task.max_attempts
+            ):
+                state.tool_results["reviewer_guidance"] = {
+                    "gemini_instruction": diagnosis.get("gemini_instruction", ""),
+                    "summary": diagnosis.get("minimal_fix_strategy", ""),
+                    "files_to_focus": diagnosis.get("files_to_focus", []),
+                }
+                self.logger.log(
+                    "diagnosis_guided_retry",
+                    request_id=state.request_id,
+                    task_id=task.id,
+                    diagnosis=diagnosis,
+                )
+                return True
         if state.convergence_status == "diverging":
             state.final_status = "blocked"
         else:
             state.final_status = "escalated"
         self._create_diagnosis_needed_package(task, state, validation_errors)
         self._finish(state, "diagnosis_needed")
+        return False
+
+    def _build_review_packet(
+        self,
+        task: TaskSpec,
+        state: OrchestratorState,
+        validation_errors: list[str],
+    ) -> ReviewPacket:
+        return self.review_packet_builder.build(
+            task=task,
+            state=state,
+            diff=self.git.diff(),
+            logs=self._collect_relevant_logs(state),
+            validation_errors=validation_errors,
+            remaining_task_usd=max(0.0, task.max_cost_usd - state.estimated_cost_usd),
+            projected_review_usd=0.0,
+        )
 
     def _create_diagnosis_needed_package(
         self,
         task: TaskSpec,
         state: OrchestratorState,
         validation_errors: list[str],
+        review_packet: ReviewPacket | None = None,
     ) -> None:
         diff = self.git.diff()
         logs = self._collect_relevant_logs(state)
-        review_packet = self.review_packet_builder.build(
-            task=task,
-            state=state,
-            diff=diff,
-            logs=logs,
-            validation_errors=validation_errors,
-            remaining_task_usd=max(0.0, task.max_cost_usd - state.estimated_cost_usd),
-            projected_review_usd=0.0,
-        )
+        review_packet = review_packet or self._build_review_packet(task, state, validation_errors)
         state.tool_results["review_packet"] = review_packet.model_dump()
-        if self.config.diagnosis.enabled:
-            self._run_diagnosis_reviewer(task, state, review_packet)
         path = self.escalation.create_package(
             task=task,
             state=state,
@@ -483,13 +538,33 @@ class WorkflowEngine:
         review_packet: ReviewPacket,
     ) -> None:
         prompt = packet_to_prompt(review_packet)
+        self._check_reviewer_call_limits(task.id)
+        if len(prompt) > self.config.diagnosis.max_context_chars:
+            raise LimitExceeded(
+                "context_limit_exceeded",
+                "diagnosis review packet exceeds max_context_chars",
+            )
         estimate = self.budget.estimate_pre_call(
             task=task,
             attempt_id=len(state.attempt_metrics) + 1,
             model_role=self.config.diagnosis.model_role,
             context=prompt,
+            model_override=self.config.diagnosis.model,
         )
         state.tool_results["diagnosis_budget_estimate"] = estimate.model_dump()
+        if estimate.estimated_input_tokens > self.config.diagnosis.max_input_tokens:
+            raise LimitExceeded(
+                "context_limit_exceeded",
+                "diagnosis input tokens exceed max_input_tokens",
+            )
+        if estimate.estimated_output_tokens > self.config.diagnosis.max_output_tokens:
+            raise LimitExceeded(
+                "output_limit_exceeded",
+                "diagnosis output tokens exceed max_output_tokens",
+            )
+        if estimate.estimated_total_cost_usd > self.config.diagnosis.max_cost_per_call_usd:
+            self.budget.record_estimate(estimate, status="blocked")
+            raise BudgetExceeded("diagnosis reviewer max_cost_per_call_usd exceeded")
         self.limits.check_pre_call(estimate)
         self.budget.check_pre_call(task, estimate)
         self.budget.record_estimate(estimate, status="estimated")
@@ -499,6 +574,18 @@ class WorkflowEngine:
             state.tool_results["diagnosis_error"] = str(exc)
             raise
         state.tool_results["diagnosis"] = diagnosis.model_dump()
+        self._record_reviewer_call(task.id)
+
+    def _check_reviewer_call_limits(self, task_id: str) -> None:
+        if self.reviewer_calls_this_run >= self.config.diagnosis.max_calls_per_run:
+            raise BudgetExceeded("diagnosis reviewer max_calls_per_run exceeded")
+        task_calls = self.reviewer_calls_by_task.get(task_id, 0)
+        if task_calls >= self.config.diagnosis.max_calls_per_task:
+            raise BudgetExceeded("diagnosis reviewer max_calls_per_task exceeded")
+
+    def _record_reviewer_call(self, task_id: str) -> None:
+        self.reviewer_calls_this_run += 1
+        self.reviewer_calls_by_task[task_id] = self.reviewer_calls_by_task.get(task_id, 0) + 1
 
     def _escalate_if_allowed(
         self,
@@ -564,6 +651,21 @@ class WorkflowEngine:
                             lines.append(f"{command} stderr:\n{stderr}")
         feedback = "\n".join(lines[-20:])
         return feedback[-self.config.limits.max_retry_context_chars :]
+
+    def _diagnosis_guidance(self, state: OrchestratorState) -> str:
+        guidance = state.tool_results.get("reviewer_guidance")
+        if not isinstance(guidance, dict):
+            return ""
+        parts = [
+            str(guidance.get("gemini_instruction", "")),
+            str(guidance.get("summary", "")),
+        ]
+        files = guidance.get("files_to_focus", [])
+        if isinstance(files, list) and files:
+            parts.append("Files to focus: " + ", ".join(str(item) for item in files))
+        return "\n".join(part for part in parts if part)[
+            -self.config.limits.max_retry_context_chars :
+        ]
 
     def _collect_relevant_logs(self, state: OrchestratorState) -> list[str]:
         logs: list[str] = []

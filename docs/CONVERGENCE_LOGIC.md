@@ -101,8 +101,11 @@ The evaluator emits one of:
 - `pause_block_task`
 - `mark_non_converging`
 
-For now, `request_diagnosis` and hard-stop conditions create a structured
-`diagnosis_needed` escalation package. No GPT/reviewer call is made yet.
+`request_diagnosis` now builds a compact review packet. If the expensive
+reviewer is disabled or blocked by budget/call limits, the engine creates a
+`diagnosis_needed` escalation package. If the dry-run diagnosis reviewer is
+enabled and accepted, only `gemini_instruction`, a compact strategy summary, and
+files to focus are fed into the next cheap-builder retry.
 
 Continue cheap retries while:
 
