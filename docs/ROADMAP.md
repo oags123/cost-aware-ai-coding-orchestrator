@@ -10,6 +10,18 @@ Run one controlled real OpenCode task in a clean clone or branch:
 4. Run the task.
 5. Inspect patch, validations, state, logs, rollback behavior, and commit behavior.
 
+## Phase 1.5 Planning Specs
+
+- [Phase 1.5 Architecture](PHASE_1_5_ARCHITECTURE.md)
+- [Model Roles](MODEL_ROLES.md)
+- [Cost Control](COST_CONTROL.md)
+- [Budgeting Strategy](BUDGETING_STRATEGY.md)
+- [Convergence Logic](CONVERGENCE_LOGIC.md)
+- [Escalation Policy](ESCALATION_POLICY.md)
+- [Review Packet Spec](REVIEW_PACKET_SPEC.md)
+- [Telegram Escalation](TELEGRAM_ESCALATION.md)
+- [Future Provider Integration](FUTURE_PROVIDER_INTEGRATION.md)
+
 ## Near-Term Follow-Ups
 
 - Add an integration test harness with a fake `opencode` executable that emits deterministic patches.
@@ -32,4 +44,3 @@ Run one controlled real OpenCode task in a clean clone or branch:
 - cloud deployment
 - Kubernetes
 - semantic memory, embeddings, RAG, vector DB
-

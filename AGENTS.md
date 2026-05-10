@@ -118,6 +118,42 @@ Use:
 4. Consider OpenCode `--format json` support if raw stdout parsing is brittle.
 5. Add reviewer-model escalation only after real builder execution is proven stable.
 
+## Phase 1.5 planning context
+
+Phase 1.5 planning docs have been added under `docs/`.
+
+New architecture philosophy:
+- cheap model = builder/executor/distiller
+- expensive model = diagnosis/review/architecture
+- orchestrator = controller/judge
+- validators = objective truth system
+- human = final escalation layer
+
+Cost-first principles:
+- minimize expensive-model token usage
+- use cheap AI preprocessing/distillation before expensive calls
+- send expensive models compact review packets, not raw repo dumps
+- keep expensive models diagnosis-only by default
+- default policy proposal: `allow_frontier_direct_patch = false`
+
+Convergence/divergence concepts:
+- continue cheap retries while tests/errors/diffs show convergence
+- escalate when retries stagnate, diverge, exceed budget/runtime, or hit hard ceilings
+- do not escalate merely because one retry failed
+
+Planning docs:
+- `docs/PHASE_1_5_ARCHITECTURE.md`
+- `docs/MODEL_ROLES.md`
+- `docs/COST_CONTROL.md`
+- `docs/BUDGETING_STRATEGY.md`
+- `docs/CONVERGENCE_LOGIC.md`
+- `docs/ESCALATION_POLICY.md`
+- `docs/REVIEW_PACKET_SPEC.md`
+- `docs/TELEGRAM_ESCALATION.md`
+- `docs/FUTURE_PROVIDER_INTEGRATION.md`
+
+Do not implement Phase 1.5 runtime behavior until explicitly requested.
+
 ## Coding standards for this repo
 
 - Use plain Python and local helper APIs.

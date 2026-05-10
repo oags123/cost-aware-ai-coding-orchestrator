@@ -137,3 +137,6 @@ Codex repository instructions live in `AGENTS.md`; the official Codex CLI docs d
 - [MVP Status](docs/MVP_STATUS.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Phase 1.5 Architecture Plan](docs/PHASE_1_5_ARCHITECTURE.md)
+- [Cost Control Plan](docs/COST_CONTROL.md)
+- [Escalation Policy Plan](docs/ESCALATION_POLICY.md)

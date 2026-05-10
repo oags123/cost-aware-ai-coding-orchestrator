@@ -40,3 +40,18 @@ These are implemented and tested with mocks/temp repositories, but should be exe
 - embeddings/RAG/vector database
 - multi-agent conversation systems
 
+## Phase 1.5 Planning Direction
+
+Phase 1.5 is planned as a cost-control and escalation-policy evolution, not a framework rewrite.
+
+The proposed role split is:
+
+- cheap model = builder/executor/distiller
+- expensive model = diagnosis/review/architecture
+- orchestrator = controller/judge
+- validators = objective truth system
+- human = final escalation layer
+
+The default proposed policy is `allow_frontier_direct_patch = false`.
+
+See [Phase 1.5 Architecture](PHASE_1_5_ARCHITECTURE.md).
