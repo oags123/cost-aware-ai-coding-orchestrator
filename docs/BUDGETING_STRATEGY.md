@@ -1,10 +1,13 @@
 # Budgeting Strategy
 
-Status: Step 1 implemented for SQLite ledger and pre-call estimates.
+Status: Step 1 and Step 2 implemented for SQLite ledger, pre-call estimates,
+and hard token/context/output size limits.
 
 ## Current State
 
-The MVP now has approximate cost estimates plus persistent SQLite spend tracking. It still does not ingest provider-reported actual usage.
+The MVP now has approximate cost estimates, persistent SQLite spend tracking,
+and hard size gates before and after the builder call. It still does not ingest
+provider-reported actual usage.
 
 ## Phase 1.5 Target
 
@@ -19,6 +22,13 @@ Implemented:
 - cheap builder budget pool
 - expensive reviewer budget pool
 - emergency budget pool reporting
+- pre-call input token cap
+- pre-call output token cap
+- context char cap
+- retry feedback char cap
+- patch byte cap
+- stdout/stderr byte caps
+- validation output byte cap
 
 Still planned:
 
@@ -50,6 +60,16 @@ budget:
   cheap_builder_budget_usd: 3.00
   expensive_reviewer_budget_usd: 1.00
   emergency_budget_usd: 1.00
+
+limits:
+  max_input_tokens_per_call: 32000
+  max_output_tokens_per_call: 4000
+  max_context_chars_per_call: 128000
+  max_retry_context_chars: 8000
+  max_patch_bytes: 256000
+  max_stdout_bytes: 256000
+  max_stderr_bytes: 64000
+  max_validation_output_bytes: 64000
 ```
 
 ## Required Tests
@@ -61,6 +81,12 @@ Implemented:
 - blocked call when projected task budget is exceeded
 - role-specific pool enforcement
 - project budget persistence across engine instances
+- context too large blocks call
+- output token estimate too large blocks call
+- patch too large rejected
+- stdout/stderr too large handled safely
+- validation output too large handled safely
+- budget ledger records limit-blocked calls
 
 Still needed:
 

@@ -19,6 +19,8 @@ Complete:
 - escalation package generation
 - JSON state and JSONL logs
 - Dockerfile and docker-compose
+- persistent SQLite budget ledger and pre-call cost estimation
+- hard token, context, output, patch, stdout/stderr, and validation output limits
 - unit tests for core safety and workflow paths
 
 Placeholder or intentionally limited:
@@ -120,8 +122,10 @@ Use:
 
 ## Phase 1.5 planning context
 
-Phase 1.5 planning docs have been added under `docs/`. Step 1 has been implemented:
-persistent SQLite budget ledger and pre-call cost estimation.
+Phase 1.5 planning docs have been added under `docs/`. Step 1 and Step 2 have
+been implemented:
+- persistent SQLite budget ledger and pre-call cost estimation
+- hard token/context/output/patch/stdout/stderr/validation-output limits
 
 New architecture philosophy:
 - cheap model = builder/executor/distiller
@@ -160,12 +164,24 @@ Implemented Phase 1.5 Step 1 files:
 - `coding_orchestrator/config.py`
 - `tests/test_budget_ledger.py`
 
+Implemented Phase 1.5 Step 2 files:
+- `coding_orchestrator/orchestrator/limits.py`
+- `tests/test_limits.py`
+- related wiring in `coding_orchestrator/orchestrator/engine.py`
+
 Current budget behavior:
 - pricing is config-driven by model role
 - pre-call estimates are made from actual context before model/OpenCode calls
 - task, role-pool, and project budgets can block calls
 - ledger entries are persisted to SQLite
 - CLI `report` includes budget usage and blocked call count
+
+Current limit behavior:
+- context/input/output limits are checked before OpenCode/model calls
+- retry feedback is truncated to configured chars
+- builder stdout/stderr and patch byte limits are checked after builder output
+- validation output is truncated by default, or rejected if configured
+- CLI `report` includes limit failures and largest tracked context/output sizes
 
 ## Coding standards for this repo
 

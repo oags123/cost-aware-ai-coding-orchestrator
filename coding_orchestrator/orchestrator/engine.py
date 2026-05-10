@@ -7,8 +7,14 @@ from uuid import uuid4
 from coding_orchestrator.config import AppConfig
 from coding_orchestrator.models.router import ModelRouter
 from coding_orchestrator.observability.logger import JsonlLogger
-from coding_orchestrator.orchestrator.budget import BudgetExceeded, BudgetGuard
+from coding_orchestrator.orchestrator.budget import (
+    BudgetEstimate,
+    BudgetExceeded,
+    BudgetGuard,
+    BudgetUsage,
+)
 from coding_orchestrator.orchestrator.escalation import EscalationManager
+from coding_orchestrator.orchestrator.limits import LimitExceeded, LimitGuard
 from coding_orchestrator.orchestrator.router import TaskClassifier
 from coding_orchestrator.orchestrator.state import StateStore
 from coding_orchestrator.orchestrator.timeouts import TimeoutExceeded, TimeoutGuard
@@ -49,6 +55,7 @@ class WorkflowEngine:
                 update={"ledger_path": str((self.repo_path / ledger_path).resolve())}
             )
         self.budget = BudgetGuard(budget_settings, config.pricing)
+        self.limits = LimitGuard(config.limits)
         self.logger = JsonlLogger(Path(config.log_path))
         self.state_store = StateStore(Path(config.state_path))
         self.escalation = EscalationManager(Path("logs/escalations"))
@@ -78,9 +85,14 @@ class WorkflowEngine:
                 guard.check()
                 state.final_status = "running"
                 self._run_builder_step(task, state, validation_errors)
-                results = self._validate(task)
+                results = self.limits.enforce_validation_output(self._validate(task))
                 state.validation_results = {result.name: result.model_dump() for result in results}
                 validation_errors = [result.message for result in results if not result.passed]
+                if any(
+                    "validation_output_limit_exceeded" in error
+                    for error in validation_errors
+                ):
+                    self._record_limit_failure(state, "validation_output_limit_exceeded")
                 if not validation_errors:
                     self._commit(task, state)
                     state.final_status = "completed"
@@ -113,6 +125,18 @@ class WorkflowEngine:
                 "details": state.tool_results.get("budget_estimate", {}),
             }
             return self._finish(state, "task_budget_blocked")
+        except LimitExceeded as exc:
+            state.final_status = "blocked"
+            validation_errors.append(exc.message)
+            self._rollback_if_checkpoint(checkpoint)
+            state.validation_results["limits"] = {
+                "name": "limits",
+                "passed": False,
+                "message": exc.message,
+                "details": {"status": exc.status},
+            }
+            self._record_limit_failure(state, exc.status)
+            return self._finish(state, exc.status)
         except Exception as exc:
             state.final_status = "failed"
             validation_errors.append(str(exc))
@@ -136,6 +160,16 @@ class WorkflowEngine:
             if state.final_status == "completed":
                 completed.add(task.id)
         return states
+
+    def budget_report(self) -> BudgetUsage:
+        metrics = self.limits.metrics
+        return self.budget.report(
+            limit_failures=metrics.limit_failures,
+            largest_patch_bytes=metrics.largest_patch_bytes,
+            largest_stdout_bytes=metrics.largest_stdout_bytes,
+            largest_stderr_bytes=metrics.largest_stderr_bytes,
+            largest_validation_output_bytes=metrics.largest_validation_output_bytes,
+        )
 
     def _initial_state(self, task: TaskSpec) -> OrchestratorState:
         complexity = self.classifier.classify_complexity(task)
@@ -172,6 +206,21 @@ class WorkflowEngine:
         context = workflow.build_context(task, state)
         if validation_errors:
             context += "\n\nPrevious validation feedback:\n" + self._compact_feedback(state)
+        try:
+            context = self.limits.prepare_context(context)
+        except LimitExceeded:
+            estimate = self.budget.estimate_pre_call(
+                task=task,
+                attempt_id=state.retry_count + 1,
+                model_role="cheap_builder",
+                context=context,
+                model_override=state.selected_model or self.config.opencode.default_model,
+            )
+            state.estimated_input_tokens = estimate.estimated_input_tokens
+            state.estimated_output_tokens = estimate.estimated_output_tokens
+            state.estimated_cost_usd = estimate.estimated_total_cost_usd
+            state.tool_results["budget_estimate"] = estimate.model_dump()
+            raise
         state.retrieved_context = [context]
         estimate = self.budget.estimate_pre_call(
             task=task,
@@ -184,6 +233,7 @@ class WorkflowEngine:
         state.estimated_output_tokens = estimate.estimated_output_tokens
         state.estimated_cost_usd = estimate.estimated_total_cost_usd
         state.tool_results["budget_estimate"] = estimate.model_dump()
+        self.limits.check_pre_call(estimate)
         self.budget.check_pre_call(task, estimate)
         self.budget.record_estimate(estimate, status="estimated")
         runner = OpenCodeRunner(
@@ -192,6 +242,7 @@ class WorkflowEngine:
             self.config.opencode,
         )
         response = runner.run_bounded_step(task, context)
+        response = self.limits.check_builder_output(response)
         state.tool_results["builder"] = {
             "model": state.selected_model,
             "confidence": response.confidence,
@@ -206,6 +257,7 @@ class WorkflowEngine:
         parsed = parse_builder_output(response.text)
         if parsed is None:
             return
+        self.limits.check_patch(parsed)
         self.patch_applier.apply(parsed, task)
         state.tool_results["patch"] = parsed.model_dump()
 
@@ -314,7 +366,8 @@ class WorkflowEngine:
                             lines.append(f"{command} stdout:\n{stdout}")
                         if stderr:
                             lines.append(f"{command} stderr:\n{stderr}")
-        return "\n".join(lines[-20:])
+        feedback = "\n".join(lines[-20:])
+        return feedback[-self.config.limits.max_retry_context_chars :]
 
     def _collect_relevant_logs(self, state: OrchestratorState) -> list[str]:
         logs: list[str] = []
@@ -328,6 +381,19 @@ class WorkflowEngine:
                 if stderr:
                     logs.append(f"{key} stderr:\n{stderr}")
         return logs
+
+    def _record_limit_failure(self, state: OrchestratorState, status: str) -> None:
+        estimate_data = state.tool_results.get("budget_estimate")
+        if not isinstance(estimate_data, dict):
+            return
+        try:
+            estimate = self.budget_estimate_from_dict(estimate_data)
+        except ValueError:
+            return
+        self.budget.record_estimate(estimate, status=status)
+
+    def budget_estimate_from_dict(self, data: dict[str, object]) -> BudgetEstimate:
+        return BudgetEstimate.model_validate(data)
 
 
 def order_tasks(tasks: list[TaskSpec]) -> list[TaskSpec]:

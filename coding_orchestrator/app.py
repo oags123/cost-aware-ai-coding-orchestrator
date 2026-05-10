@@ -38,14 +38,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps([state.model_dump(mode="json") for state in states], indent=2))
         return 0 if all(state.final_status in {"completed", "skipped"} for state in states) else 1
     if args.command == "validate":
-        results = engine._validate(task=TaskSpec(id="manual", title="Manual validation"))  # noqa: SLF001
+        results = engine.limits.enforce_validation_output(  # noqa: SLF001
+            engine._validate(task=TaskSpec(id="manual", title="Manual validation"))
+        )
         print(json.dumps([result.model_dump() for result in results], indent=2))
         return 0 if all(result.passed for result in results) else 1
     if args.command == "report":
         report_states = engine.state_store.load_all()
         payload = {
             "states": {key: value.model_dump(mode="json") for key, value in report_states.items()},
-            "budget": engine.budget.report().model_dump(mode="json"),
+            "budget": engine.budget_report().model_dump(mode="json"),
         }
         print(json.dumps(payload, indent=2))
         return 0

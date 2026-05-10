@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -27,6 +27,20 @@ class BudgetSettings(BaseModel):
     cheap_builder_budget_usd: float = 3.0
     expensive_reviewer_budget_usd: float = 1.0
     emergency_budget_usd: float = 1.0
+
+
+class LimitSettings(BaseModel):
+    max_input_tokens_per_call: int = 32_000
+    max_output_tokens_per_call: int = 4_000
+    max_context_chars_per_call: int = 128_000
+    max_retry_context_chars: int = 8_000
+    max_patch_bytes: int = 256_000
+    max_stdout_bytes: int = 256_000
+    max_stderr_bytes: int = 64_000
+    max_validation_output_bytes: int = 64_000
+    context_over_limit_policy: Literal["reject", "trim"] = "reject"
+    output_over_limit_policy: Literal["reject", "truncate"] = "reject"
+    validation_output_over_limit_policy: Literal["reject", "truncate"] = "truncate"
 
 
 class ModelPricing(BaseModel):
@@ -117,6 +131,7 @@ class AppConfig(BaseModel):
     timeouts: TimeoutSettings = Field(default_factory=TimeoutSettings)
     retries: RetrySettings = Field(default_factory=RetrySettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
+    limits: LimitSettings = Field(default_factory=LimitSettings)
     pricing: PricingSettings = Field(default_factory=PricingSettings)
     validation: ValidationSettings = Field(default_factory=ValidationSettings)
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)

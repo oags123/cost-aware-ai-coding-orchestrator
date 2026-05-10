@@ -1,6 +1,7 @@
 # Cost Control Specification
 
-Status: Step 1 implemented for persistent budget ledger and pre-call estimation.
+Status: Step 1 and Step 2 implemented for persistent budget ledger, pre-call
+estimation, and hard token/context/output/patch/stdout limits.
 
 ## Optimization Target
 
@@ -17,14 +18,17 @@ Implemented controls:
 - role budget pool check
 - project total budget check
 - budget report with usage, remaining budget, and blocked calls
+- hard input-token and output-token caps before OpenCode/model calls
+- hard context character cap before OpenCode/model calls
+- retry feedback truncation
+- patch byte cap before safe patch application
+- stdout/stderr byte caps after builder execution
+- validation output truncation or rejection
+- report fields for limit failures and largest tracked context/output sizes
 
 Still planned:
 
 - max expensive-model calls per task
-- max expensive-model input tokens
-- max context chars
-- max patch bytes
-- max stdout/stderr chars
 - max review packet chars
 - emergency budget behavior beyond reporting
 
@@ -36,8 +40,40 @@ Before any model/OpenCode call:
 2. Use configured role max output tokens.
 3. Look up model pricing.
 4. Compute projected cost.
-5. Compare against task, role pool, and project budgets.
-6. Block the call if projected spend exceeds limits.
+5. Check context, input token, and configured output token limits.
+6. Compare against task, role pool, and project budgets.
+7. Block the call if projected spend or hard limits are exceeded.
+
+## Hard Limits
+
+Configured limits:
+
+```yaml
+limits:
+  max_input_tokens_per_call: 32000
+  max_output_tokens_per_call: 4000
+  max_context_chars_per_call: 128000
+  max_retry_context_chars: 8000
+  max_patch_bytes: 256000
+  max_stdout_bytes: 256000
+  max_stderr_bytes: 64000
+  max_validation_output_bytes: 64000
+  context_over_limit_policy: "reject"
+  output_over_limit_policy: "reject"
+  validation_output_over_limit_policy: "truncate"
+```
+
+Failure statuses:
+
+- `context_limit_exceeded`
+- `output_limit_exceeded`
+- `patch_limit_exceeded`
+- `validation_output_limit_exceeded`
+
+Context and output limits are enforced before OpenCode is invoked. Builder
+stdout/stderr and patches are checked after execution but before patch
+application. Validation output is either truncated or converted to a failed
+validation result, depending on config.
 
 ## Budget Ledger
 
@@ -51,6 +87,7 @@ Spend events are persisted to SQLite:
   "model_role": "expensive_reviewer",
   "provider": "placeholder",
   "model": "provider/model",
+  "estimated_context_chars": 16000,
   "estimated_input_tokens": 4000,
   "estimated_output_tokens": 1000,
   "estimated_input_cost_usd": 0.02,
@@ -97,3 +134,11 @@ If a pre-call estimate exceeds budget:
 - write a budget-blocked state
 - include the projected spend and remaining budget
 - record a blocked ledger event
+
+If a hard limit is exceeded:
+
+- do not call the model when the failure is known pre-call
+- do not apply the patch when patch/output limits are exceeded post-call
+- write a blocked task state for pre-call/builder/patch limit failures
+- record the limit status in the budget ledger when a call estimate exists
+- include limit counters and largest tracked sizes in `report`

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from coding_orchestrator.config import BudgetSettings, ModelPricing, PricingSettings
 from coding_orchestrator.schemas import OrchestratorState, TaskSpec
@@ -22,6 +22,7 @@ class BudgetEstimate(BaseModel):
     model_role: str
     provider: str
     model: str
+    estimated_context_chars: int = 0
     estimated_input_tokens: int
     estimated_output_tokens: int
     estimated_input_cost_usd: float
@@ -45,6 +46,13 @@ class BudgetUsage(BaseModel):
     emergency_spend_usd: float
     emergency_remaining_usd: float
     blocked_calls: int
+    limit_failures: dict[str, int] = Field(default_factory=dict)
+    largest_context_chars: int = 0
+    largest_input_tokens: int = 0
+    largest_patch_bytes: int = 0
+    largest_stdout_bytes: int = 0
+    largest_stderr_bytes: int = 0
+    largest_validation_output_bytes: int = 0
 
 
 class BudgetLedger:
@@ -67,12 +75,13 @@ class BudgetLedger:
                 """
                 INSERT INTO budget_events (
                     project_id, task_id, attempt_id, model_role, provider, model,
+                    estimated_context_chars,
                     estimated_input_tokens, estimated_output_tokens,
                     estimated_input_cost_usd, estimated_output_cost_usd,
                     estimated_total_cost_usd, actual_input_tokens, actual_output_tokens,
                     actual_cost_usd, timestamp, status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     estimate.project_id,
@@ -81,6 +90,7 @@ class BudgetLedger:
                     estimate.model_role,
                     estimate.provider,
                     estimate.model,
+                    estimate.estimated_context_chars,
                     estimate.estimated_input_tokens,
                     estimate.estimated_output_tokens,
                     estimate.estimated_input_cost_usd,
@@ -95,38 +105,62 @@ class BudgetLedger:
             )
 
     def spend_for_project(self, project_id: str) -> float:
-        return self._sum("project_id = ? AND status != 'blocked'", (project_id,))
+        return self._sum(
+            "project_id = ? AND status != 'blocked' AND status NOT LIKE '%_limit_exceeded'",
+            (project_id,),
+        )
 
     def spend_for_role(self, project_id: str, model_role: str) -> float:
         return self._sum(
-            "project_id = ? AND model_role = ? AND status != 'blocked'",
+            "project_id = ? AND model_role = ? AND status != 'blocked' "
+            "AND status NOT LIKE '%_limit_exceeded'",
             (project_id, model_role),
         )
 
     def spend_for_task(self, project_id: str, task_id: str | None) -> float:
         if task_id is None:
             return self._sum(
-                "project_id = ? AND task_id IS NULL AND status != 'blocked'",
+                "project_id = ? AND task_id IS NULL AND status != 'blocked' "
+                "AND status NOT LIKE '%_limit_exceeded'",
                 (project_id,),
             )
         return self._sum(
-            "project_id = ? AND task_id = ? AND status != 'blocked'",
+            "project_id = ? AND task_id = ? AND status != 'blocked' "
+            "AND status NOT LIKE '%_limit_exceeded'",
             (project_id, task_id),
         )
 
     def blocked_calls(self, project_id: str) -> int:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) FROM budget_events WHERE project_id = ? AND status = 'blocked'",
+                """
+                SELECT COUNT(*) FROM budget_events
+                WHERE project_id = ?
+                  AND (status = 'blocked' OR status LIKE '%_limit_exceeded')
+                """,
                 (project_id,),
             ).fetchone()
         return int(row[0]) if row else 0
 
-    def usage(self, settings: BudgetSettings) -> BudgetUsage:
+    def usage(
+        self,
+        settings: BudgetSettings,
+        *,
+        limit_failures: dict[str, int] | None = None,
+        largest_patch_bytes: int = 0,
+        largest_stdout_bytes: int = 0,
+        largest_stderr_bytes: int = 0,
+        largest_validation_output_bytes: int = 0,
+    ) -> BudgetUsage:
         project_spend = self.spend_for_project(settings.project_id)
         cheap_spend = self.spend_for_role(settings.project_id, "cheap_builder")
         expensive_spend = self.spend_for_role(settings.project_id, "expensive_reviewer")
         emergency_spend = self.spend_for_role(settings.project_id, "emergency")
+        largest = self._largest_estimates(settings.project_id)
+        ledger_limit_failures = self.limit_failures(settings.project_id)
+        combined_limit_failures = dict(ledger_limit_failures)
+        for key, count in (limit_failures or {}).items():
+            combined_limit_failures[key] = max(combined_limit_failures.get(key, 0), count)
         return BudgetUsage(
             project_id=settings.project_id,
             project_total_budget_usd=settings.project_total_budget_usd,
@@ -143,7 +177,27 @@ class BudgetLedger:
             emergency_spend_usd=emergency_spend,
             emergency_remaining_usd=settings.emergency_budget_usd - emergency_spend,
             blocked_calls=self.blocked_calls(settings.project_id),
+            limit_failures=combined_limit_failures,
+            largest_context_chars=largest["context_chars"],
+            largest_input_tokens=largest["input_tokens"],
+            largest_patch_bytes=largest_patch_bytes,
+            largest_stdout_bytes=largest_stdout_bytes,
+            largest_stderr_bytes=largest_stderr_bytes,
+            largest_validation_output_bytes=largest_validation_output_bytes,
         )
+
+    def limit_failures(self, project_id: str) -> dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT status, COUNT(*)
+                FROM budget_events
+                WHERE project_id = ? AND status LIKE '%_limit_exceeded'
+                GROUP BY status
+                """,
+                (project_id,),
+            ).fetchall()
+        return {str(status): int(count) for status, count in rows}
 
     def _init_db(self) -> None:
         with self._connect() as conn:
@@ -157,6 +211,7 @@ class BudgetLedger:
                     model_role TEXT NOT NULL,
                     provider TEXT NOT NULL,
                     model TEXT NOT NULL,
+                    estimated_context_chars INTEGER NOT NULL DEFAULT 0,
                     estimated_input_tokens INTEGER NOT NULL,
                     estimated_output_tokens INTEGER NOT NULL,
                     estimated_input_cost_usd REAL NOT NULL,
@@ -170,6 +225,15 @@ class BudgetLedger:
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(budget_events)").fetchall()
+            }
+            if "estimated_context_chars" not in columns:
+                conn.execute(
+                    "ALTER TABLE budget_events ADD COLUMN estimated_context_chars INTEGER "
+                    "NOT NULL DEFAULT 0"
+                )
 
     def _sum(self, where_clause: str, params: tuple[str, ...]) -> float:
         with self._connect() as conn:
@@ -185,6 +249,23 @@ class BudgetLedger:
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
+
+    def _largest_estimates(self, project_id: str) -> dict[str, int]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COALESCE(MAX(estimated_context_chars), 0),
+                    COALESCE(MAX(estimated_input_tokens), 0)
+                FROM budget_events
+                WHERE project_id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+        return {
+            "context_chars": int(row[0]) if row else 0,
+            "input_tokens": int(row[1]) if row else 0,
+        }
 
 
 @dataclass
@@ -225,6 +306,7 @@ class BudgetGuard:
             model_role=model_role,
             provider=pricing.provider,
             model=model_override or pricing.model,
+            estimated_context_chars=len(context),
             estimated_input_tokens=input_tokens,
             estimated_output_tokens=output_tokens,
             estimated_input_cost_usd=input_cost,
@@ -259,9 +341,24 @@ class BudgetGuard:
         assert self.ledger is not None
         self.ledger.record(estimate, status=status)
 
-    def report(self) -> BudgetUsage:
+    def report(
+        self,
+        *,
+        limit_failures: dict[str, int] | None = None,
+        largest_patch_bytes: int = 0,
+        largest_stdout_bytes: int = 0,
+        largest_stderr_bytes: int = 0,
+        largest_validation_output_bytes: int = 0,
+    ) -> BudgetUsage:
         assert self.ledger is not None
-        return self.ledger.usage(self.settings)
+        return self.ledger.usage(
+            self.settings,
+            limit_failures=limit_failures,
+            largest_patch_bytes=largest_patch_bytes,
+            largest_stdout_bytes=largest_stdout_bytes,
+            largest_stderr_bytes=largest_stderr_bytes,
+            largest_validation_output_bytes=largest_validation_output_bytes,
+        )
 
     def can_spend(self, task: TaskSpec, state: OrchestratorState) -> bool:
         assert self.ledger is not None

@@ -28,6 +28,19 @@ budget:
   expensive_reviewer_budget_usd: 1.0
   emergency_budget_usd: 1.0
 
+limits:
+  max_input_tokens_per_call: 32000
+  max_output_tokens_per_call: 4000
+  max_context_chars_per_call: 128000
+  max_retry_context_chars: 8000
+  max_patch_bytes: 256000
+  max_stdout_bytes: 256000
+  max_stderr_bytes: 64000
+  max_validation_output_bytes: 64000
+  context_over_limit_policy: "reject"
+  output_over_limit_policy: "reject"
+  validation_output_over_limit_policy: "truncate"
+
 # Sample prices are placeholders for local planning only.
 # Audit and update these values before real paid usage.
 pricing:
