@@ -22,6 +22,7 @@ class BudgetEstimate(BaseModel):
     model_role: str
     provider: str
     model: str
+    inference_tier: str | None = None
     estimated_context_chars: int = 0
     estimated_input_tokens: int
     estimated_output_tokens: int
@@ -53,6 +54,16 @@ class BudgetUsage(BaseModel):
     largest_stdout_bytes: int = 0
     largest_stderr_bytes: int = 0
     largest_validation_output_bytes: int = 0
+    calls_by_tier: dict[str, int] = Field(default_factory=dict)
+    estimated_cost_by_tier_usd: dict[str, float] = Field(default_factory=dict)
+    flex_timeouts: int = 0
+    standard_fallbacks: int = 0
+
+
+class TierUsage(BaseModel):
+    calls_by_tier: dict[str, int] = Field(default_factory=dict)
+    estimated_cost_by_tier_usd: dict[str, float] = Field(default_factory=dict)
+    standard_fallbacks: int = 0
 
 
 class BudgetLedger:
@@ -75,13 +86,14 @@ class BudgetLedger:
                 """
                 INSERT INTO budget_events (
                     project_id, task_id, attempt_id, model_role, provider, model,
+                    inference_tier,
                     estimated_context_chars,
                     estimated_input_tokens, estimated_output_tokens,
                     estimated_input_cost_usd, estimated_output_cost_usd,
                     estimated_total_cost_usd, actual_input_tokens, actual_output_tokens,
                     actual_cost_usd, timestamp, status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     estimate.project_id,
@@ -90,6 +102,7 @@ class BudgetLedger:
                     estimate.model_role,
                     estimate.provider,
                     estimate.model,
+                    estimate.inference_tier,
                     estimate.estimated_context_chars,
                     estimate.estimated_input_tokens,
                     estimate.estimated_output_tokens,
@@ -151,6 +164,8 @@ class BudgetLedger:
         largest_stdout_bytes: int = 0,
         largest_stderr_bytes: int = 0,
         largest_validation_output_bytes: int = 0,
+        flex_timeouts: int = 0,
+        standard_fallbacks: int = 0,
     ) -> BudgetUsage:
         project_spend = self.spend_for_project(settings.project_id)
         cheap_spend = self.spend_for_role(settings.project_id, "cheap_builder")
@@ -161,6 +176,7 @@ class BudgetLedger:
         combined_limit_failures = dict(ledger_limit_failures)
         for key, count in (limit_failures or {}).items():
             combined_limit_failures[key] = max(combined_limit_failures.get(key, 0), count)
+        tier_usage = self.tier_usage(settings.project_id)
         return BudgetUsage(
             project_id=settings.project_id,
             project_total_budget_usd=settings.project_total_budget_usd,
@@ -184,6 +200,37 @@ class BudgetLedger:
             largest_stdout_bytes=largest_stdout_bytes,
             largest_stderr_bytes=largest_stderr_bytes,
             largest_validation_output_bytes=largest_validation_output_bytes,
+            calls_by_tier=tier_usage.calls_by_tier,
+            estimated_cost_by_tier_usd=tier_usage.estimated_cost_by_tier_usd,
+            flex_timeouts=flex_timeouts,
+            standard_fallbacks=max(standard_fallbacks, tier_usage.standard_fallbacks),
+        )
+
+    def tier_usage(self, project_id: str) -> TierUsage:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    COALESCE(inference_tier, 'unspecified'),
+                    COUNT(*),
+                    COALESCE(SUM(estimated_total_cost_usd), 0)
+                FROM budget_events
+                WHERE project_id = ?
+                  AND status != 'blocked'
+                  AND status NOT LIKE '%_limit_exceeded'
+                GROUP BY COALESCE(inference_tier, 'unspecified')
+                """,
+                (project_id,),
+            ).fetchall()
+        calls_by_tier: dict[str, int] = {}
+        cost_by_tier: dict[str, float] = {}
+        for tier, calls, cost in rows:
+            calls_by_tier[str(tier)] = int(calls)
+            cost_by_tier[str(tier)] = float(cost)
+        return TierUsage(
+            calls_by_tier=calls_by_tier,
+            estimated_cost_by_tier_usd=cost_by_tier,
+            standard_fallbacks=calls_by_tier.get("standard", 0),
         )
 
     def limit_failures(self, project_id: str) -> dict[str, int]:
@@ -211,6 +258,7 @@ class BudgetLedger:
                     model_role TEXT NOT NULL,
                     provider TEXT NOT NULL,
                     model TEXT NOT NULL,
+                    inference_tier TEXT,
                     estimated_context_chars INTEGER NOT NULL DEFAULT 0,
                     estimated_input_tokens INTEGER NOT NULL,
                     estimated_output_tokens INTEGER NOT NULL,
@@ -234,6 +282,8 @@ class BudgetLedger:
                     "ALTER TABLE budget_events ADD COLUMN estimated_context_chars INTEGER "
                     "NOT NULL DEFAULT 0"
                 )
+            if "inference_tier" not in columns:
+                conn.execute("ALTER TABLE budget_events ADD COLUMN inference_tier TEXT")
 
     def _sum(self, where_clause: str, params: tuple[str, ...]) -> float:
         with self._connect() as conn:
@@ -293,8 +343,9 @@ class BudgetGuard:
         model_role: str,
         context: str,
         model_override: str | None = None,
+        inference_tier: str | None = None,
     ) -> BudgetEstimate:
-        pricing = self._pricing_for_role(model_role)
+        pricing = self.pricing_for_role(model_role, inference_tier)
         input_tokens = self.estimate_tokens(context)
         output_tokens = pricing.max_output_tokens
         input_cost = (input_tokens / 1_000_000.0) * pricing.input_usd_per_1m_tokens
@@ -306,6 +357,7 @@ class BudgetGuard:
             model_role=model_role,
             provider=pricing.provider,
             model=model_override or pricing.model,
+            inference_tier=inference_tier or pricing.inference_tier,
             estimated_context_chars=len(context),
             estimated_input_tokens=input_tokens,
             estimated_output_tokens=output_tokens,
@@ -349,6 +401,8 @@ class BudgetGuard:
         largest_stdout_bytes: int = 0,
         largest_stderr_bytes: int = 0,
         largest_validation_output_bytes: int = 0,
+        flex_timeouts: int = 0,
+        standard_fallbacks: int = 0,
     ) -> BudgetUsage:
         assert self.ledger is not None
         return self.ledger.usage(
@@ -358,6 +412,8 @@ class BudgetGuard:
             largest_stdout_bytes=largest_stdout_bytes,
             largest_stderr_bytes=largest_stderr_bytes,
             largest_validation_output_bytes=largest_validation_output_bytes,
+            flex_timeouts=flex_timeouts,
+            standard_fallbacks=standard_fallbacks,
         )
 
     def can_spend(self, task: TaskSpec, state: OrchestratorState) -> bool:
@@ -376,11 +432,20 @@ class BudgetGuard:
     def estimate_tokens(self, text: str) -> int:
         return max(1, len(text) // 4)
 
-    def _pricing_for_role(self, model_role: str) -> ModelPricing:
+    def pricing_for_role(
+        self,
+        model_role: str,
+        inference_tier: str | None = None,
+    ) -> ModelPricing:
         assert self.pricing is not None
-        pricing = self.pricing.roles.get(model_role)
+        pricing = None
+        if inference_tier:
+            pricing = self.pricing.roles.get(f"{model_role}:{inference_tier}")
         if pricing is None:
-            raise BudgetExceeded(f"No pricing configured for model role: {model_role}")
+            pricing = self.pricing.roles.get(model_role)
+        if pricing is None:
+            suffix = f":{inference_tier}" if inference_tier else ""
+            raise BudgetExceeded(f"No pricing configured for model role: {model_role}{suffix}")
         return pricing
 
     def _role_budget(self, model_role: str) -> float:

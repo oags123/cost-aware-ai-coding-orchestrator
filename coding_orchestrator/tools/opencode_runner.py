@@ -12,7 +12,9 @@ from coding_orchestrator.tools.shell import run_limited_command
 
 
 class OpenCodeExecutionError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, timed_out: bool = False) -> None:
+        super().__init__(message)
+        self.timed_out = timed_out
 
 
 @dataclass
@@ -39,9 +41,12 @@ class OpenCodeRunner:
             raise OpenCodeExecutionError(settings.missing_install_note)
 
         prompt = self._build_prompt(task, context, settings.output_mode)
+        model_name = self.model_name
+        if model_name == "opencode-local" and settings.default_model:
+            model_name = settings.default_model
         command = [executable, "run"]
-        if settings.default_model:
-            command.extend(["--model", settings.default_model])
+        if model_name:
+            command.extend(["--model", model_name])
         command.extend(settings.extra_args)
         command.append(prompt)
 
@@ -55,7 +60,7 @@ class OpenCodeRunner:
         )
         if result.returncode != 0 or result.timed_out:
             message = result.stderr or result.stdout or "OpenCode execution failed"
-            raise OpenCodeExecutionError(message)
+            raise OpenCodeExecutionError(message, timed_out=result.timed_out)
         return BuilderResult(
             text=result.stdout,
             confidence=0.0,

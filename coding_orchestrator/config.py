@@ -43,9 +43,28 @@ class LimitSettings(BaseModel):
     validation_output_over_limit_policy: Literal["reject", "truncate"] = "truncate"
 
 
+class FlexTierSettings(BaseModel):
+    max_attempt_runtime_seconds: int = 600
+    max_consecutive_timeouts: int = 2
+    timeout_rate_threshold: float = 0.5
+
+
+class CheapBuilderTierSettings(BaseModel):
+    default_tier: Literal["flex", "standard"] = "flex"
+    fallback_tier: Literal["flex", "standard"] = "standard"
+    flex: FlexTierSettings = Field(default_factory=FlexTierSettings)
+    max_standard_fallbacks_per_run: int = 1
+    max_standard_fallback_cost_usd_per_run: float = 0.25
+
+
+class InferenceSettings(BaseModel):
+    cheap_builder: CheapBuilderTierSettings = Field(default_factory=CheapBuilderTierSettings)
+
+
 class ModelPricing(BaseModel):
     provider: str
     model: str
+    inference_tier: str | None = None
     input_usd_per_1m_tokens: float
     output_usd_per_1m_tokens: float
     max_output_tokens: int
@@ -55,11 +74,21 @@ class ModelPricing(BaseModel):
 class PricingSettings(BaseModel):
     roles: dict[str, ModelPricing] = Field(
         default_factory=lambda: {
-            "cheap_builder": ModelPricing(
-                provider="opencode",
-                model="opencode-local",
-                input_usd_per_1m_tokens=0.10,
-                output_usd_per_1m_tokens=0.40,
+            "cheap_builder:flex": ModelPricing(
+                provider="google-gemini",
+                model="gemini-3.1-flash-lite",
+                inference_tier="flex",
+                input_usd_per_1m_tokens=0.125,
+                output_usd_per_1m_tokens=0.75,
+                max_output_tokens=4000,
+                budget_pool="cheap_builder",
+            ),
+            "cheap_builder:standard": ModelPricing(
+                provider="google-gemini",
+                model="gemini-3.1-flash-lite",
+                inference_tier="standard",
+                input_usd_per_1m_tokens=0.25,
+                output_usd_per_1m_tokens=1.50,
                 max_output_tokens=4000,
                 budget_pool="cheap_builder",
             ),
@@ -132,6 +161,7 @@ class AppConfig(BaseModel):
     retries: RetrySettings = Field(default_factory=RetrySettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
+    inference: InferenceSettings = Field(default_factory=InferenceSettings)
     pricing: PricingSettings = Field(default_factory=PricingSettings)
     validation: ValidationSettings = Field(default_factory=ValidationSettings)
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)

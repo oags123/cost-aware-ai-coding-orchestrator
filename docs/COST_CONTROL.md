@@ -1,7 +1,8 @@
 # Cost Control Specification
 
-Status: Step 1 and Step 2 implemented for persistent budget ledger, pre-call
-estimation, and hard token/context/output/patch/stdout limits.
+Status: Step 1, Step 2, and Step 3 implemented for persistent budget ledger,
+pre-call estimation, hard size limits, and Gemini Flex/Standard builder tier
+policy.
 
 ## Optimization Target
 
@@ -25,6 +26,10 @@ Implemented controls:
 - stdout/stderr byte caps after builder execution
 - validation output truncation or rejection
 - report fields for limit failures and largest tracked context/output sizes
+- Gemini Flex as the default cheap builder tier
+- controlled Gemini Standard fallback after Flex timeout policy triggers
+- per-run Standard fallback count and cost caps
+- report fields for calls/cost by tier, Flex timeouts, and Standard fallbacks
 
 Still planned:
 
@@ -75,6 +80,56 @@ stdout/stderr and patches are checked after execution but before patch
 application. Validation output is either truncated or converted to a failed
 validation result, depending on config.
 
+## Gemini Builder Tiers
+
+The cheap builder defaults to Gemini Flex and falls back to Gemini Standard only
+when Flex timeout policy allows it:
+
+```yaml
+inference:
+  cheap_builder:
+    default_tier: "flex"
+    fallback_tier: "standard"
+    flex:
+      max_attempt_runtime_seconds: 600
+      max_consecutive_timeouts: 2
+      timeout_rate_threshold: 0.5
+    max_standard_fallbacks_per_run: 1
+    max_standard_fallback_cost_usd_per_run: 0.25
+```
+
+As of the Google docs checked for this implementation, the current stable cheap
+Flash-Lite model is `gemini-3.1-flash-lite`. Google documents Flex as Preview,
+best-effort, lower-priority capacity with variable latency, no automatic
+server-side fallback, and client-side retry/fallback responsibility.
+
+The default pricing entries are config-driven and must be audited before real
+paid usage:
+
+```yaml
+pricing:
+  roles:
+    cheap_builder:flex:
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      inference_tier: "flex"
+      input_usd_per_1m_tokens: 0.125
+      output_usd_per_1m_tokens: 0.75
+      max_output_tokens: 4000
+      budget_pool: "cheap_builder"
+    cheap_builder:standard:
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      inference_tier: "standard"
+      input_usd_per_1m_tokens: 0.25
+      output_usd_per_1m_tokens: 1.50
+      max_output_tokens: 4000
+      budget_pool: "cheap_builder"
+```
+
+The orchestrator never falls back to GPT-5.5 for builder work. Expensive models
+remain outside the cheap builder path.
+
 ## Budget Ledger
 
 Spend events are persisted to SQLite:
@@ -87,6 +142,7 @@ Spend events are persisted to SQLite:
   "model_role": "expensive_reviewer",
   "provider": "placeholder",
   "model": "provider/model",
+  "inference_tier": "flex",
   "estimated_context_chars": 16000,
   "estimated_input_tokens": 4000,
   "estimated_output_tokens": 1000,
@@ -116,10 +172,10 @@ budget:
 pricing:
   roles:
     cheap_builder:
-      provider: "opencode"
-      model: "opencode-local"
-      input_usd_per_1m_tokens: 0.10
-      output_usd_per_1m_tokens: 0.40
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      input_usd_per_1m_tokens: 0.125
+      output_usd_per_1m_tokens: 0.75
       max_output_tokens: 4000
       budget_pool: "cheap_builder"
 ```

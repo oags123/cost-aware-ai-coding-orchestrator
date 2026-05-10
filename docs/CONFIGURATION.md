@@ -12,6 +12,7 @@ Config is YAML and loaded from `config.yaml` by default. If no config file exist
 - `retries` - global retry defaults.
 - `budget` - estimated task/project cost limits.
 - `limits` - hard token, context, patch, stdout/stderr, and validation output caps.
+- `inference` - cheap builder Flex/Standard tier policy.
 - `pricing` - model-role pricing and output token assumptions.
 - `validation` - max changed files, forbidden paths, default commands.
 - `tool_permissions` - allowlisted deterministic command names.
@@ -51,11 +52,20 @@ budget:
 
 pricing:
   roles:
-    cheap_builder:
-      provider: "opencode"
-      model: "opencode-local"
-      input_usd_per_1m_tokens: 0.10
-      output_usd_per_1m_tokens: 0.40
+    cheap_builder:flex:
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      inference_tier: "flex"
+      input_usd_per_1m_tokens: 0.125
+      output_usd_per_1m_tokens: 0.75
+      max_output_tokens: 4000
+      budget_pool: "cheap_builder"
+    cheap_builder:standard:
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      inference_tier: "standard"
+      input_usd_per_1m_tokens: 0.25
+      output_usd_per_1m_tokens: 1.50
       max_output_tokens: 4000
       budget_pool: "cheap_builder"
 ```
@@ -83,6 +93,28 @@ limits:
 `context_over_limit_policy` supports `reject` or `trim`. `output_over_limit_policy`
 supports `reject` or `truncate`. Validation output can be rejected as a failed
 validation result or truncated for state/log safety.
+
+## Inference Tier Settings
+
+The cheap builder path defaults to Gemini Flex and only uses Standard as a
+bounded fallback after Flex timeout policy triggers:
+
+```yaml
+inference:
+  cheap_builder:
+    default_tier: "flex"
+    fallback_tier: "standard"
+    flex:
+      max_attempt_runtime_seconds: 600
+      max_consecutive_timeouts: 2
+      timeout_rate_threshold: 0.5
+    max_standard_fallbacks_per_run: 1
+    max_standard_fallback_cost_usd_per_run: 0.25
+```
+
+Flex pricing/model entries are separate from Standard entries. Keep both
+config-driven and audit them against current Google pricing before real use.
+The builder tier policy does not add a GPT fallback.
 
 ## Git Settings
 

@@ -21,6 +21,7 @@ Complete:
 - Dockerfile and docker-compose
 - persistent SQLite budget ledger and pre-call cost estimation
 - hard token, context, output, patch, stdout/stderr, and validation output limits
+- Gemini Flex/Standard cheap builder tier policy with bounded Standard fallback
 - unit tests for core safety and workflow paths
 
 Placeholder or intentionally limited:
@@ -28,7 +29,7 @@ Placeholder or intentionally limited:
 - budget accounting is estimated, not provider-reported
 - dry-run builder output is mock output
 - workflows beyond `explain_code`, `fix_bug`, and `write_tests` are scaffolded
-- no Gemini/provider routing or pricing integration exists
+- no direct Gemini API integration exists; Gemini model/tier policy is config and OpenCode-path routing only
 
 ## Project goal
 
@@ -126,6 +127,7 @@ Phase 1.5 planning docs have been added under `docs/`. Step 1 and Step 2 have
 been implemented:
 - persistent SQLite budget ledger and pre-call cost estimation
 - hard token/context/output/patch/stdout/stderr/validation-output limits
+- Gemini Flex default builder tier with controlled Standard fallback
 
 New architecture philosophy:
 - cheap model = builder/executor/distiller
@@ -169,6 +171,11 @@ Implemented Phase 1.5 Step 2 files:
 - `tests/test_limits.py`
 - related wiring in `coding_orchestrator/orchestrator/engine.py`
 
+Implemented Phase 1.5 Step 3 files:
+- `coding_orchestrator/orchestrator/tier_policy.py`
+- `tests/test_tier_policy.py`
+- tier-aware budget ledger/report wiring in `coding_orchestrator/orchestrator/budget.py`
+
 Current budget behavior:
 - pricing is config-driven by model role
 - pre-call estimates are made from actual context before model/OpenCode calls
@@ -182,6 +189,14 @@ Current limit behavior:
 - builder stdout/stderr and patch byte limits are checked after builder output
 - validation output is truncated by default, or rejected if configured
 - CLI `report` includes limit failures and largest tracked context/output sizes
+
+Current tier behavior:
+- cheap builder defaults to Gemini Flex
+- current documented stable cheap model default is `gemini-3.1-flash-lite`
+- Standard fallback is allowed only after Flex timeout policy triggers
+- Standard fallback is capped by per-run count and estimated cost
+- builder work must not fall back to GPT-5.5 or other frontier models
+- CLI `report` includes calls/cost by tier, Flex timeouts, and Standard fallbacks
 
 ## Coding standards for this repo
 

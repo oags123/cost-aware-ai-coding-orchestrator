@@ -23,6 +23,26 @@ opencode:
   output_mode: "unified_diff"
 ```
 
+For the cheap builder tier policy, the orchestrator currently uses the
+config-driven pricing/model entries under:
+
+```yaml
+pricing:
+  roles:
+    cheap_builder:flex:
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      inference_tier: "flex"
+    cheap_builder:standard:
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      inference_tier: "standard"
+```
+
+As of the Google docs checked for this implementation, `gemini-3.1-flash-lite`
+is the current stable Flash-Lite model. Confirm the exact OpenCode provider
+model string available in your local `opencode models` output before real use.
+
 ## Runner Behavior
 
 The runner calls:
@@ -32,6 +52,11 @@ opencode run <prompt>
 ```
 
 with `--model <provider/model>` when configured.
+
+The orchestrator applies the selected model from the active builder tier. Flex
+uses a separate max attempt runtime, and Standard is used only when Flex timeout
+policy triggers and Standard fallback count/cost limits allow it. The policy
+does not fall back to GPT for builder work.
 
 The prompt instructs OpenCode to return only a unified diff, or structured JSON when `output_mode` is configured for JSON patch output.
 
@@ -48,4 +73,3 @@ opencode:
   allowed_env_vars:
     - "OPENAI_API_KEY"
 ```
-

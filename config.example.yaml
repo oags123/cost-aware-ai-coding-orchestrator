@@ -41,15 +41,35 @@ limits:
   output_over_limit_policy: "reject"
   validation_output_over_limit_policy: "truncate"
 
+inference:
+  cheap_builder:
+    default_tier: "flex"
+    fallback_tier: "standard"
+    flex:
+      max_attempt_runtime_seconds: 600
+      max_consecutive_timeouts: 2
+      timeout_rate_threshold: 0.5
+    max_standard_fallbacks_per_run: 1
+    max_standard_fallback_cost_usd_per_run: 0.25
+
 # Sample prices are placeholders for local planning only.
-# Audit and update these values before real paid usage.
+# Audit and update these values against official Google pricing before real paid usage.
 pricing:
   roles:
-    cheap_builder:
-      provider: "opencode"
-      model: "opencode-local"
-      input_usd_per_1m_tokens: 0.10
-      output_usd_per_1m_tokens: 0.40
+    cheap_builder:flex:
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      inference_tier: "flex"
+      input_usd_per_1m_tokens: 0.125
+      output_usd_per_1m_tokens: 0.75
+      max_output_tokens: 4000
+      budget_pool: "cheap_builder"
+    cheap_builder:standard:
+      provider: "google-gemini"
+      model: "gemini-3.1-flash-lite"
+      inference_tier: "standard"
+      input_usd_per_1m_tokens: 0.25
+      output_usd_per_1m_tokens: 1.50
       max_output_tokens: 4000
       budget_pool: "cheap_builder"
     expensive_reviewer:

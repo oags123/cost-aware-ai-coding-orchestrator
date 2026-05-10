@@ -17,16 +17,18 @@ from coding_orchestrator.orchestrator.escalation import EscalationManager
 from coding_orchestrator.orchestrator.limits import LimitExceeded, LimitGuard
 from coding_orchestrator.orchestrator.router import TaskClassifier
 from coding_orchestrator.orchestrator.state import StateStore
+from coding_orchestrator.orchestrator.tier_policy import CheapBuilderTierPolicy
 from coding_orchestrator.orchestrator.timeouts import TimeoutExceeded, TimeoutGuard
 from coding_orchestrator.orchestrator.workflows import WORKFLOWS
 from coding_orchestrator.schemas import (
+    BuilderResult,
     OrchestratorState,
     TaskSpec,
     ValidationResult,
     load_task_file,
 )
 from coding_orchestrator.tools.git import GitCheckpoint, GitManager
-from coding_orchestrator.tools.opencode_runner import OpenCodeRunner
+from coding_orchestrator.tools.opencode_runner import OpenCodeExecutionError, OpenCodeRunner
 from coding_orchestrator.tools.patch import SafePatchApplier, parse_builder_output
 from coding_orchestrator.validators.code_validator import SyntaxValidator
 from coding_orchestrator.validators.patch_validator import PatchValidator
@@ -56,6 +58,7 @@ class WorkflowEngine:
             )
         self.budget = BudgetGuard(budget_settings, config.pricing)
         self.limits = LimitGuard(config.limits)
+        self.tier_policy = CheapBuilderTierPolicy(config.inference.cheap_builder)
         self.logger = JsonlLogger(Path(config.log_path))
         self.state_store = StateStore(Path(config.state_path))
         self.escalation = EscalationManager(Path("logs/escalations"))
@@ -169,6 +172,8 @@ class WorkflowEngine:
             largest_stdout_bytes=metrics.largest_stdout_bytes,
             largest_stderr_bytes=metrics.largest_stderr_bytes,
             largest_validation_output_bytes=metrics.largest_validation_output_bytes,
+            flex_timeouts=self.tier_policy.state.flex_timeouts,
+            standard_fallbacks=self.tier_policy.state.standard_fallbacks,
         )
 
     def _initial_state(self, task: TaskSpec) -> OrchestratorState:
@@ -209,12 +214,15 @@ class WorkflowEngine:
         try:
             context = self.limits.prepare_context(context)
         except LimitExceeded:
+            tier = self.tier_policy.select_tier()
+            pricing = self.budget.pricing_for_role("cheap_builder", tier)
             estimate = self.budget.estimate_pre_call(
                 task=task,
                 attempt_id=state.retry_count + 1,
                 model_role="cheap_builder",
                 context=context,
-                model_override=state.selected_model or self.config.opencode.default_model,
+                model_override=pricing.model,
+                inference_tier=tier,
             )
             state.estimated_input_tokens = estimate.estimated_input_tokens
             state.estimated_output_tokens = estimate.estimated_output_tokens
@@ -222,29 +230,11 @@ class WorkflowEngine:
             state.tool_results["budget_estimate"] = estimate.model_dump()
             raise
         state.retrieved_context = [context]
-        estimate = self.budget.estimate_pre_call(
-            task=task,
-            attempt_id=state.retry_count + 1,
-            model_role="cheap_builder",
-            context=context,
-            model_override=state.selected_model or self.config.opencode.default_model,
-        )
-        state.estimated_input_tokens = estimate.estimated_input_tokens
-        state.estimated_output_tokens = estimate.estimated_output_tokens
-        state.estimated_cost_usd = estimate.estimated_total_cost_usd
-        state.tool_results["budget_estimate"] = estimate.model_dump()
-        self.limits.check_pre_call(estimate)
-        self.budget.check_pre_call(task, estimate)
-        self.budget.record_estimate(estimate, status="estimated")
-        runner = OpenCodeRunner(
-            self.repo_path,
-            state.selected_model or self.config.opencode.default_model,
-            self.config.opencode,
-        )
-        response = runner.run_bounded_step(task, context)
+        response = self._run_tiered_builder(task, state, context)
         response = self.limits.check_builder_output(response)
         state.tool_results["builder"] = {
-            "model": state.selected_model,
+            "model": state.tool_results.get("builder_model"),
+            "tier": state.tool_results.get("builder_tier"),
             "confidence": response.confidence,
             "text": response.text,
             "returncode": response.returncode,
@@ -260,6 +250,73 @@ class WorkflowEngine:
         self.limits.check_patch(parsed)
         self.patch_applier.apply(parsed, task)
         state.tool_results["patch"] = parsed.model_dump()
+
+    def _run_tiered_builder(
+        self,
+        task: TaskSpec,
+        state: OrchestratorState,
+        context: str,
+    ) -> BuilderResult:
+        while True:
+            tier = self.tier_policy.select_tier()
+            pricing = self.budget.pricing_for_role("cheap_builder", tier)
+            estimate = self.budget.estimate_pre_call(
+                task=task,
+                attempt_id=state.retry_count + 1,
+                model_role="cheap_builder",
+                context=context,
+                model_override=pricing.model,
+                inference_tier=tier,
+            )
+            if tier == "standard":
+                try:
+                    self.tier_policy.check_standard_fallback(estimate)
+                except BudgetExceeded:
+                    self.budget.record_estimate(estimate, status="blocked")
+                    raise
+            self._prepare_builder_call(task, state, estimate)
+            self.tier_policy.record_call(tier)
+            runner_settings = self.config.opencode.model_copy(
+                update={
+                    "default_model": pricing.model,
+                    "max_runtime_seconds": self.tier_policy.timeout_seconds(
+                        tier,
+                        self.config.opencode.max_runtime_seconds,
+                    ),
+                }
+            )
+            runner = OpenCodeRunner(self.repo_path, pricing.model, runner_settings)
+            try:
+                response = runner.run_bounded_step(task, context)
+            except OpenCodeExecutionError as exc:
+                if tier == "flex" and exc.timed_out:
+                    self.tier_policy.record_flex_timeout()
+                    state.tool_results["builder_timeout"] = {
+                        "tier": tier,
+                        "message": str(exc),
+                    }
+                    if self.tier_policy.should_fallback_to_standard():
+                        self.tier_policy.activate_fallback()
+                        continue
+                raise
+            self.tier_policy.record_success(tier)
+            state.tool_results["builder_tier"] = tier
+            state.tool_results["builder_model"] = pricing.model
+            return response
+
+    def _prepare_builder_call(
+        self,
+        task: TaskSpec,
+        state: OrchestratorState,
+        estimate: BudgetEstimate,
+    ) -> None:
+        state.estimated_input_tokens = estimate.estimated_input_tokens
+        state.estimated_output_tokens = estimate.estimated_output_tokens
+        state.estimated_cost_usd = estimate.estimated_total_cost_usd
+        state.tool_results["budget_estimate"] = estimate.model_dump()
+        self.limits.check_pre_call(estimate)
+        self.budget.check_pre_call(task, estimate)
+        self.budget.record_estimate(estimate, status="estimated")
 
     def _validate(self, task: TaskSpec) -> list[ValidationResult]:
         changed = self.git.changed_files()
