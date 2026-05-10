@@ -1,5 +1,33 @@
 # AGENTS.md
 
+## Current implementation status
+
+This repository now contains a usable local Phase 1 MVP.
+
+Complete:
+- typed task and orchestrator state with Pydantic
+- YAML config and task files
+- CLI commands: `run`, `run-all`, `validate`, `report`
+- dependency ordering for task queues
+- task classification, workflow selection, and model routing
+- dry-run builder mode
+- config-gated real OpenCode mode using `opencode run`
+- strict patch contract and safe patch application
+- validators for command safety, patch boundaries, permissions, syntax, and tests
+- git checkpoint, rollback, scoped commit, diff, and status helpers
+- bounded retry loop with validator feedback
+- escalation package generation
+- JSON state and JSONL logs
+- Dockerfile and docker-compose
+- unit tests for core safety and workflow paths
+
+Placeholder or intentionally limited:
+- Codex/Claude reviewer integrations are placeholders only
+- budget accounting is estimated, not provider-reported
+- dry-run builder output is mock output
+- workflows beyond `explain_code`, `fix_bug`, and `write_tests` are scaffolded
+- no Gemini/provider routing or pricing integration exists
+
 ## Project goal
 
 Build Phase 1 of a Cost-Aware AI Coding Orchestrator.
@@ -25,6 +53,39 @@ request → classify → route → build context → execute bounded step → va
 - The orchestrator runs deterministic tools itself: git, pytest, ruff, mypy.
 - LLMs are only called inside bounded steps.
 
+## OpenCode integration
+
+OpenCode real mode is disabled by default:
+
+```yaml
+opencode:
+  enabled: false
+  dry_run: true
+```
+
+When enabled with `dry_run: false`, `coding_orchestrator/tools/opencode_runner.py` invokes `opencode run` with a bounded timeout. It expects only a unified diff or JSON containing `patch`, `touched_files`, `summary`, and `confidence`.
+
+OpenCode output is parsed by `coding_orchestrator/tools/patch.py` and applied only after:
+- file boundary validation
+- forbidden path validation
+- delete policy validation
+- max changed file validation
+- `git apply --check`
+
+Do not add arbitrary shell execution for model output.
+
+## Retry and escalation behavior
+
+Retries are bounded by `TaskSpec.max_attempts`. Validator failures are compacted and included in the next builder prompt. When attempts are exhausted or escalation conditions apply, an escalation package is written under `logs/escalations/`.
+
+Escalation packages are for manual/reviewer follow-up. No reviewer model API is integrated yet.
+
+## Git and rollback behavior
+
+Before each task the engine captures a `GitCheckpoint`. On failure or timeout it restores tracked/staged changes and removes untracked files created after the checkpoint, while preserving configured safe paths such as `logs/` and cache directories.
+
+On success, commits stage only `task.allowed_files`. If there are no changes, the commit step is treated as no-op success. Commit failure fails the task.
+
 ## Phase 1 scope
 
 Implement:
@@ -32,7 +93,7 @@ Implement:
 - task classifier
 - model router
 - workflow engine
-- OpenCode runner interface
+- OpenCode runner interface and config-gated real execution
 - Codex/Claude escalation interface as placeholders
 - git manager
 - validator runner
@@ -45,10 +106,25 @@ Implement:
 ## Validation commands
 
 Use:
-- ruff check .
-- mypy .
-- pytest
+- .venv/bin/ruff check .
+- .venv/bin/mypy .
+- .venv/bin/pytest
 
-## Output requirement
+## Recommended next implementation priorities
 
-Create a working Python package with tests and a README.
+1. Manually install/authenticate OpenCode and run one controlled real task in a clean clone or branch.
+2. Add an integration test harness with a fake `opencode` executable that emits a patch.
+3. Improve real-mode observability around OpenCode stdout/stderr and patch summaries.
+4. Consider OpenCode `--format json` support if raw stdout parsing is brittle.
+5. Add reviewer-model escalation only after real builder execution is proven stable.
+
+## Coding standards for this repo
+
+- Use plain Python and local helper APIs.
+- Keep state typed with Pydantic.
+- Keep config in YAML.
+- Use subprocess wrappers with timeouts.
+- Keep retries, runtime, and cost bounded.
+- Add tests for safety boundaries and failure paths.
+- Do not hardcode API keys, tokens, or secrets.
+- Do not introduce LangChain, LangGraph, CrewAI, AutoGen, dashboards, embeddings, RAG, vector databases, or cloud deployment without explicit approval.

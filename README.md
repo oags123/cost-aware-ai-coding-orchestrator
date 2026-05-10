@@ -1,6 +1,6 @@
 # Cost-Aware AI Coding Orchestrator
 
-Phase 1 MVP of a controlled local workflow engine for small coding tasks. This is not a free-roaming agent: Python owns the workflow, deterministic tools execute commands, validators decide whether results are acceptable, and model integrations are bounded placeholders.
+Phase 1 MVP of a controlled local workflow engine for small coding tasks. This is not a free-roaming agent: Python owns the workflow, deterministic tools execute commands, validators decide whether results are acceptable, and model execution is bounded by config, timeouts, budgets, patch contracts, and file permissions.
 
 ## Workflow
 
@@ -11,8 +11,10 @@ Implemented pieces:
 - Pydantic task and orchestrator state
 - YAML config and YAML/frontmatter task files
 - Dependency ordering for many small task files
-- Model routing placeholders for deterministic, local builder, reviewer, and human approval tiers
-- Bounded OpenCode runner interface placeholder
+- Model routing for deterministic, local builder, reviewer-placeholder, and human approval tiers
+- Dry-run builder mode plus config-gated real OpenCode execution through `opencode run`
+- Strict OpenCode output contract: unified diff or structured JSON patch
+- Safe patch application with `git apply --check`
 - Retry, timeout, budget, permission, patch, syntax, command, and test validation
 - Git diff/status/commit/rollback wrappers
 - JSON state and JSONL logs
@@ -66,6 +68,8 @@ opencode:
 
 Install and authenticate OpenCode separately before enabling real mode. See the official CLI docs: <https://opencode.ai/docs/cli/>. The orchestrator invokes only `opencode run ...` with a bounded timeout and requires OpenCode output to be either a unified diff or structured JSON with `patch`, `touched_files`, `summary`, and `confidence`.
 
+Use `opencode auth login` and `opencode models --refresh` / `opencode models` to configure providers and find the exact `provider/model` string before enabling real mode.
+
 Patch safety rules:
 
 - `git apply --check` runs before applying.
@@ -117,6 +121,19 @@ Task details go here.
 
 ## Phase 1 Boundaries
 
-No LangChain, LangGraph, CrewAI, AutoGen, web UI, Kubernetes, paid APIs, embeddings, semantic memory, vector database, or cloud deployment are included. LLMs do not run shell commands or decide policy.
+No LangChain, LangGraph, CrewAI, AutoGen, web UI, Kubernetes, paid APIs beyond the user's separate OpenCode setup, embeddings, semantic memory, vector database, or cloud deployment are included. LLMs do not run shell commands or decide policy.
 
 Codex repository instructions live in `AGENTS.md`; the official Codex CLI docs describe generating this file with `/init`: <https://developers.openai.com/codex/cli/slash-commands#generate-agentsmd-with-init>.
+
+## More Documentation
+
+- [Quickstart](docs/QUICKSTART.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Configuration](docs/CONFIGURATION.md)
+- [Tasks](docs/TASKS.md)
+- [Safety](docs/SAFETY.md)
+- [OpenCode Setup](docs/OPEN_CODE_SETUP.md)
+- [Development](docs/DEVELOPMENT.md)
+- [MVP Status](docs/MVP_STATUS.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
