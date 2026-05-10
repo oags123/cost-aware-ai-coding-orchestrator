@@ -29,6 +29,27 @@ opencode models
 
 If Docker reports permission denied for `/var/run/docker.sock`, the current user cannot access Docker. Fix local Docker permissions before running compose commands.
 
+## Telegram Alerts Do Not Send
+
+Telegram alerts are disabled by default. Enable them in `config.yaml`:
+
+```yaml
+telegram:
+  enabled: true
+```
+
+Then export the configured environment variables before starting the
+orchestrator:
+
+```bash
+export TELEGRAM_BOT_TOKEN="..."
+export TELEGRAM_CHAT_ID="..."
+```
+
+Do not store those values in repo files. If Telegram is enabled but env vars are
+missing, `missing_env_policy: "warn"` skips the alert and logs a warning.
+`missing_env_policy: "fail"` stops with a clear configuration error.
+
 ## Git Commit Identity Missing
 
 Configure identity locally:
@@ -64,4 +85,3 @@ Run each command directly:
 ```
 
 Inspect `logs/orchestrator.jsonl`, `logs/state.json`, and `logs/escalations/` for task-level context.
-

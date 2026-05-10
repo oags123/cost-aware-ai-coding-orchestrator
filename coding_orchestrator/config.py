@@ -92,6 +92,18 @@ class DiagnosisSettings(BaseModel):
     allow_direct_patch: bool = False
 
 
+class TelegramSettings(BaseModel):
+    enabled: bool = False
+    bot_token_env_var: str = "TELEGRAM_BOT_TOKEN"
+    chat_id_env_var: str = "TELEGRAM_CHAT_ID"
+    missing_env_policy: Literal["warn", "fail"] = "warn"
+    notify_on_blocked: bool = True
+    notify_on_budget_exhausted: bool = True
+    notify_on_runtime_exhausted: bool = True
+    notify_on_no_runnable_tasks: bool = True
+    notify_on_system_error: bool = True
+
+
 class ModelPricing(BaseModel):
     provider: str
     model: str
@@ -195,6 +207,7 @@ class AppConfig(BaseModel):
     inference: InferenceSettings = Field(default_factory=InferenceSettings)
     convergence: ConvergenceSettings = Field(default_factory=ConvergenceSettings)
     diagnosis: DiagnosisSettings = Field(default_factory=DiagnosisSettings)
+    telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     pricing: PricingSettings = Field(default_factory=PricingSettings)
     validation: ValidationSettings = Field(default_factory=ValidationSettings)
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)

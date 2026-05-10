@@ -7,6 +7,7 @@ from uuid import uuid4
 from coding_orchestrator.config import AppConfig
 from coding_orchestrator.models.router import ModelRouter
 from coding_orchestrator.observability.logger import JsonlLogger
+from coding_orchestrator.observability.telegram import TelegramAlert, TelegramNotifier
 from coding_orchestrator.orchestrator.budget import (
     BudgetEstimate,
     BudgetExceeded,
@@ -74,6 +75,7 @@ class WorkflowEngine:
         self.reviewer_calls_this_run = 0
         self.reviewer_calls_by_task: dict[str, int] = {}
         self.logger = JsonlLogger(Path(config.log_path))
+        self.telegram = TelegramNotifier(config.telegram, budget_settings)
         self.state_store = StateStore(Path(config.state_path))
         self.escalation = EscalationManager(Path("logs/escalations"))
         self.git = GitManager(self.repo_path)
@@ -188,6 +190,18 @@ class WorkflowEngine:
             states.append(state)
             if state.final_status == "completed":
                 completed.add(task.id)
+        if not completed and self.config.telegram.notify_on_no_runnable_tasks:
+            self._send_telegram_alert(
+                TelegramAlert(
+                    project_id=self.budget.settings.project_id,
+                    reason="no_runnable_tasks",
+                    completed_count=0,
+                    blocked_count=sum(1 for state in states if state.final_status != "completed"),
+                    estimated_cost_spent=self.budget_report().project_total_spend_usd,
+                    budget_remaining=self.budget_report().project_total_remaining_usd,
+                    recommended_next_action="Review blocked task dependencies and task states.",
+                )
+            )
         return states
 
     def budget_report(self) -> BudgetUsage:
@@ -609,6 +623,12 @@ class WorkflowEngine:
             task_id=task.id,
             path=str(path),
         )
+        if self.config.telegram.notify_on_blocked:
+            self._notify_state(
+                "human_attention_needed",
+                state,
+                "Review the escalation package and decide the next bounded action.",
+            )
         return True
 
     def _finish(self, state: OrchestratorState, event: str) -> OrchestratorState:
@@ -622,6 +642,7 @@ class WorkflowEngine:
             retries=state.retry_count,
             cost=state.estimated_cost_usd,
         )
+        self._notify_on_finish(state, event)
         return state
 
     def _rollback_if_checkpoint(self, checkpoint: GitCheckpoint | None) -> None:
@@ -692,6 +713,55 @@ class WorkflowEngine:
 
     def budget_estimate_from_dict(self, data: dict[str, object]) -> BudgetEstimate:
         return BudgetEstimate.model_validate(data)
+
+    def _notify_on_finish(self, state: OrchestratorState, event: str) -> None:
+        if state.final_status == "blocked" and self.config.telegram.notify_on_blocked:
+            reason = "blocked"
+            if event == "task_budget_blocked" and self.config.telegram.notify_on_budget_exhausted:
+                reason = "budget_exhausted"
+            self._notify_state(reason, state, "Inspect task state and budget/validator details.")
+        elif state.final_status == "timeout" and self.config.telegram.notify_on_runtime_exhausted:
+            self._notify_state(
+                "runtime_exhausted",
+                state,
+                "Review timeout settings or split the task into smaller work.",
+            )
+        elif state.final_status == "failed" and self.config.telegram.notify_on_system_error:
+            self._notify_state(
+                "system_error",
+                state,
+                "Inspect logs and escalation package before retrying.",
+            )
+        elif state.final_status == "escalated" and self.config.telegram.notify_on_blocked:
+            self._notify_state(
+                "human_attention_needed",
+                state,
+                "Review escalation package and decide whether to retry or intervene.",
+            )
+
+    def _notify_state(
+        self,
+        reason: str,
+        state: OrchestratorState,
+        recommended_next_action: str,
+    ) -> None:
+        usage = self.budget_report()
+        alert = self.telegram.alert_from_state(
+            reason=reason,
+            state=state,
+            usage=usage,
+            recommended_next_action=recommended_next_action,
+        )
+        self._send_telegram_alert(alert)
+
+    def _send_telegram_alert(self, alert: TelegramAlert) -> None:
+        warning = self.telegram.send_alert(alert)
+        if warning:
+            self.logger.log(
+                "telegram_warning",
+                reason=alert.reason,
+                warning=warning,
+            )
 
 
 def order_tasks(tasks: list[TaskSpec]) -> list[TaskSpec]:

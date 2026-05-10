@@ -15,6 +15,7 @@ Config is YAML and loaded from `config.yaml` by default. If no config file exist
 - `inference` - cheap builder Flex/Standard tier policy.
 - `convergence` - cheap retry convergence/divergence thresholds.
 - `diagnosis` - diagnosis-only reviewer packet and dry-run interface settings.
+- `telegram` - optional blocker/stop alert notifications.
 - `pricing` - model-role pricing and output token assumptions.
 - `validation` - max changed files, forbidden paths, default commands.
 - `tool_permissions` - allowlisted deterministic command names.
@@ -149,6 +150,31 @@ diagnosis:
 `allow_direct_patch` must stay `false` unless a future implementation adds
 explicit human approval, budget override, and patch validation for expensive
 model output.
+
+## Telegram Alerts
+
+Telegram is disabled by default and is only used for blocker/stop notifications.
+It does not approve work, continue runs, change model permissions, or execute
+commands.
+
+```yaml
+telegram:
+  enabled: false
+  bot_token_env_var: "TELEGRAM_BOT_TOKEN"
+  chat_id_env_var: "TELEGRAM_CHAT_ID"
+  missing_env_policy: "warn"
+  notify_on_blocked: true
+  notify_on_budget_exhausted: true
+  notify_on_runtime_exhausted: true
+  notify_on_no_runnable_tasks: true
+  notify_on_system_error: true
+```
+
+The bot token and chat id are read from environment variables only. Do not put
+secrets in `config.yaml`, task files, logs, or docs. With
+`missing_env_policy: "warn"`, missing environment variables produce a warning
+event and skip the alert. With `"fail"`, the notifier raises a clear
+configuration error.
 
 ## Git Settings
 

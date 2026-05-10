@@ -81,6 +81,17 @@ diagnosis:
   max_stderr_chars: 4000
   allow_direct_patch: false
 
+telegram:
+  enabled: false
+  bot_token_env_var: "TELEGRAM_BOT_TOKEN"
+  chat_id_env_var: "TELEGRAM_CHAT_ID"
+  missing_env_policy: "warn"
+  notify_on_blocked: true
+  notify_on_budget_exhausted: true
+  notify_on_runtime_exhausted: true
+  notify_on_no_runnable_tasks: true
+  notify_on_system_error: true
+
 # Sample prices are placeholders for local planning only.
 # Audit and update these values against official Google pricing before real paid usage.
 pricing:

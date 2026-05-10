@@ -25,6 +25,7 @@ Complete:
 - convergence/divergence attempt metrics with diagnosis-needed escalation packages
 - diagnosis-only review packet builder and dry-run reviewer interface
 - expensive reviewer diagnosis contract, budget gates, and call limits
+- Telegram blocker/stop alerts, disabled by default
 - unit tests for core safety and workflow paths
 
 Placeholder or intentionally limited:
@@ -33,6 +34,7 @@ Placeholder or intentionally limited:
 - dry-run builder output is mock output
 - workflows beyond `explain_code`, `fix_bug`, and `write_tests` are scaffolded
 - no direct Gemini API integration exists; Gemini model/tier policy is config and OpenCode-path routing only
+- unattended SafeAuto is documented as a future idea only
 
 ## Project goal
 
@@ -233,6 +235,19 @@ Current convergence behavior:
 - enabled diagnosis can feed bounded guidance into the next cheap-builder retry
 - no real GPT/reviewer API call is implemented yet
 - direct expensive-model patches remain disabled by policy
+
+Current Telegram behavior:
+- alerts are disabled by default
+- bot token and chat id are read from environment variables only
+- token and chat id must never be hardcoded in repo files
+- alerts cover blocker/stop conditions such as blocked tasks, budget exhaustion, runtime exhaustion, no runnable tasks, system errors, and escalation
+- Telegram is notification-only; it does not approve, resume, or change runs
+
+Future SafeAuto status:
+- `safe_auto` / `unattended_safe_auto` is not implemented
+- the future concept is documented in `docs/FUTURE_UNATTENDED_SAFE_AUTO.md`
+- SafeAuto would be orchestrator policy, not a Google, OpenAI, or OpenCode feature
+- OpenCode permissions remain separate from orchestrator governance
 
 ## Coding standards for this repo
 
