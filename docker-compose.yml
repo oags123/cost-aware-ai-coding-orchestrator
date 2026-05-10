@@ -1,0 +1,12 @@
+services:
+  orchestrator:
+    build: .
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - orchestrator_logs:/workspace/logs
+    command: python -m coding_orchestrator.app report
+
+volumes:
+  orchestrator_logs:
+

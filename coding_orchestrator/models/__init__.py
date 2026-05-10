@@ -1,0 +1,2 @@
+"""Model abstractions and placeholders."""
+

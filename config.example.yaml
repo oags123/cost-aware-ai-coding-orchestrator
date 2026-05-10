@@ -1,0 +1,69 @@
+repo_path: "."
+state_path: "logs/state.json"
+log_path: "logs/orchestrator.jsonl"
+
+model_routing:
+  trivial: "deterministic"
+  simple: "opencode-local"
+  medium: "opencode-coding"
+  hard: "codex-reviewer-placeholder"
+  critical: "human-approval"
+
+timeouts:
+  max_task_runtime_seconds: 600
+  max_attempt_runtime_seconds: 300
+  max_total_runtime_seconds: 3600
+
+retries:
+  max_retries: 1
+
+budget:
+  max_task_cost_usd: 0.10
+  max_project_cost_usd: 5.0
+  stop_threshold_ratio: 0.9
+
+validation:
+  max_files_changed: 5
+  forbidden_paths:
+    - "/etc/"
+    - "~/.ssh"
+    - ".env"
+    - "secrets"
+    - "credentials"
+    - "tokens"
+  default_commands:
+    - "ruff check ."
+    - "mypy ."
+    - "pytest"
+
+tool_permissions:
+  allowlisted_shell_commands:
+    - "git"
+    - "pytest"
+    - "ruff"
+    - "mypy"
+    - "python"
+    - "python3"
+  require_approval_for_delete: true
+
+opencode:
+  enabled: false
+  dry_run: true
+  executable: "opencode"
+  default_model: "opencode-local"
+  max_runtime_seconds: 300
+  output_mode: "unified_diff"
+  allowed_env_vars: []
+  extra_args: []
+  missing_install_note: "OpenCode is not installed or not on PATH. Install and authenticate OpenCode, then set opencode.enabled=true and opencode.dry_run=false."
+
+git:
+  require_clean_worktree: false
+  preserve_untracked_dirs:
+    - "logs"
+    - ".cache"
+    - ".pytest_cache"
+    - ".mypy_cache"
+    - ".ruff_cache"
+  preserve_untracked_files:
+    - ".gitignore"

@@ -1,0 +1,2 @@
+"""Hash-based cache."""
+
