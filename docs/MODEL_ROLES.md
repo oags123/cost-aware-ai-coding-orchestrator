@@ -1,96 +1,56 @@
 # Model Roles Specification
 
-Status: implemented for cheap builder routing and diagnosis-only reviewer guardrails.
+Status: Phase 2.5 catalog and routing defaults updated for OpenAI-first capability roles.
 
-## Cheap Model
+## Model Catalog
 
-Responsibilities:
+| Alias | Model ID | Purpose |
+| --- | --- | --- |
+| `openai_ultra_cheap_legacy` | `gpt-5-nano` | cheapest classification/summarization only |
+| `openai_nano` | `gpt-5.4-nano` | default mechanical worker |
+| `openai_mini_legacy` | `gpt-5-mini` | legacy mini fallback |
+| `openai_mini` | `gpt-5.4-mini` | default simple/general builder |
+| `openai_codex` | `gpt-5.3-codex` | coding-optimized builder/reviewer |
+| `openai_frontier_balanced` | `gpt-5.4` | balanced frontier reviewer |
+| `openai_frontier` | `gpt-5.5` | main frontier reviewer |
+| `openai_frontier_pro` | `gpt-5.5-pro` | manual approval emergency reviewer |
+| `openai_legacy_reasoning` | `gpt-5` | compatibility fallback only |
+| `openai_non_reasoning` | `gpt-4.1` | deterministic non-reasoning fallback |
 
-- small patches
-- bounded implementation
-- retries
-- boilerplate
-- simple tests
-- wiring
-- formatting
-- local fixes
-- validator output compression
-- structured summarization
-- reranking/filtering/distillation
-- compact review packet construction
+Thinking is request-level configuration (`reasoning_effort`), not a separate model ID.
+`gpt-5.3-codex` with `medium` and `high` reasoning uses the same model ID.
 
-Must not:
+## Role Mapping
 
-- own architecture
-- perform large reasoning loops
-- perform open-ended debugging
-- redesign systems
-- review entire repositories
-- receive full raw logs by default
+| Role | Default alias/model | Reasoning | Tier policy |
+| --- | --- | --- | --- |
+| `mechanical_worker` | `openai_nano` / `gpt-5.4-nano` | `low` | `flex` then `default` |
+| `ultra_cheap_classifier` | `openai_ultra_cheap_legacy` / `gpt-5-nano` | `none` | `flex` then `default` |
+| `simple_builder` | `openai_mini` / `gpt-5.4-mini` | `low` | `flex` then `default` |
+| `general_builder` | `openai_mini` / `gpt-5.4-mini` | `low` (raise to `medium` per request) | `flex` then `default` |
+| `coding_optimized_builder` | `openai_codex` / `gpt-5.3-codex` | `medium` | `default` |
+| `frontier_coding_reviewer` | `openai_codex` / `gpt-5.3-codex` | `high` | `default` |
+| `frontier_balanced_reviewer` | `openai_frontier_balanced` / `gpt-5.4` | `medium`/`high` | `default` |
+| `frontier_reviewer` | `openai_frontier` / `gpt-5.5` | `medium` by default | `default` |
+| `emergency_pro_reviewer` | `openai_frontier_pro` / `gpt-5.5-pro` | `high` | manual approval only |
+| `legacy_reasoning_fallback` | `openai_legacy_reasoning` / `gpt-5` | `low`/`medium` | `default` |
+| `non_reasoning_instruction_follower` | `openai_non_reasoning` / `gpt-4.1` | `none` | `default` |
 
-## Expensive Model
+## Routing Matrix
 
-Responsibilities:
+- tiny deterministic extraction: `mechanical_worker` (`gpt-5.4-nano`, `none/low`, `flex`)
+- tiny validated patch: `mechanical_worker`, escalate quickly on validation failure
+- small local patch: `simple_builder` (`gpt-5.4-mini`, `low`, `flex`)
+- normal implementation: `general_builder` (`gpt-5.4-mini`, `low/medium`, `flex/default`)
+- coding-heavy integration: `coding_optimized_builder` (`gpt-5.3-codex`, `medium`, `default`)
+- stubborn test failures: `frontier_coding_reviewer` diagnosis, then builder applies fix
+- architecture/planning: `frontier_reviewer` (`gpt-5.5`, `medium/high`, `default`)
+- repeated hard blocker: `emergency_pro_reviewer` (`gpt-5.5-pro`) with manual approval
+- deterministic no-reasoning fallback: `non_reasoning_instruction_follower` (`gpt-4.1`)
 
-- root cause diagnosis
-- repair strategy
-- architecture review
-- risk analysis
-- edge-case analysis
-- suspicious diff review
-- retry guidance
-- high-risk validation
+## Guardrails
 
-Must not:
-
-- become primary builder
-- rewrite modules by default
-- receive full repo context
-- receive massive raw logs
-- generate huge outputs by default
-- produce patches unless explicitly approved by a human and budget gate
-
-Current reviewer contract:
-
-- structured diagnosis only
-- no unified diffs
-- no file writes
-- no shell commands
-- no large code blocks
-- no direct patches
-- only `gemini_instruction` and compact diagnosis summary may feed the next cheap retry
-
-## Proposed Config
-
-```yaml
-model_roles:
-  cheap_builder:
-    provider: opencode
-    model: provider/small-coding-model
-    max_input_tokens: 12000
-    max_output_tokens: 4000
-  cheap_distiller:
-    provider: opencode
-    model: provider/small-reasoning-model
-    max_input_tokens: 16000
-    max_output_tokens: 2000
-  expensive_reviewer:
-    enabled: false
-    provider: placeholder
-    model: frontier-reviewer-placeholder
-    diagnosis_only: true
-    allow_direct_patch: false
-    max_calls_per_task: 1
-    max_calls_per_run: 2
-    max_input_tokens: 8000
-    max_output_tokens: 1500
-    max_context_chars: 24000
-    max_cost_per_call_usd: 0.25
-```
-
-## Test Expectations
-
-- Cheap builder is selected for normal repair attempts.
-- Expensive reviewer is never selected for patch generation by default.
-- Expensive call is blocked if projected cost exceeds remaining budget.
-- Expensive output is treated as guidance, not automatically applied code.
+- `allow_frontier_direct_patch` defaults to `false`.
+- `allow_xhigh_reasoning` defaults to `false`.
+- `allow_emergency_pro_reviewer` defaults to `false`.
+- Model output still cannot execute shell commands directly.

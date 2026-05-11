@@ -9,6 +9,7 @@ description = "Controlled local workflow engine for cost-aware AI coding tasks."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "openai>=2.0",
   "pydantic>=2.6",
   "PyYAML>=6.0",
 ]

@@ -1,8 +1,7 @@
 # Cost Control Specification
 
-Status: Step 1, Step 2, and Step 3 implemented for persistent budget ledger,
-pre-call estimation, hard size limits, and Gemini Flex/Standard builder tier
-policy, and convergence/divergence metrics.
+Status: Phase 2.5 catalog refresh completed for OpenAI role defaults, service tiers,
+and pricing metadata.
 
 ## Optimization Target
 
@@ -104,55 +103,49 @@ stdout/stderr and patches are checked after execution but before patch
 application. Validation output is either truncated or converted to a failed
 validation result, depending on config.
 
-## Gemini Builder Tiers
+## OpenAI Service Tiers
 
-The cheap builder defaults to Gemini Flex and falls back to Gemini Standard only
-when Flex timeout policy allows it:
+Non-urgent builder roles default to Flex where supported and fall back to
+Default when Flex timeouts or resource unavailability repeat.
 
 ```yaml
-inference:
-  cheap_builder:
-    default_tier: "flex"
-    fallback_tier: "standard"
-    flex:
-      max_attempt_runtime_seconds: 600
-      max_consecutive_timeouts: 2
-      timeout_rate_threshold: 0.5
-    max_standard_fallbacks_per_run: 1
-    max_standard_fallback_cost_usd_per_run: 0.25
+policies:
+  service_tiers:
+    budget_optimization_enabled: true
+    default_builder_tier: "flex"
+    fallback_builder_tier: "default"
+    priority_enabled: false
+    max_flex_timeouts_before_fallback: 2
+    max_priority_cost_usd_per_run: 0.0
 ```
 
-As of the Google docs checked for this implementation, the current stable cheap
-Flash-Lite model is `gemini-3.1-flash-lite`. Google documents Flex as Preview,
-best-effort, lower-priority capacity with variable latency, no automatic
-server-side fallback, and client-side retry/fallback responsibility.
+Flex behavior follows OpenAI docs:
+- lower cost, slower response, occasional 429 resource unavailable
+- increase request timeout for Flex workloads
+- fallback to `default` when Flex retries/timeouts exceed policy
+- record actual `service_tier` returned by API when available
 
-The default pricing entries are config-driven and must be audited before real
-paid usage:
+Priority remains disabled by default and requires explicit policy + budget approval.
+
+Pricing stays config-driven and includes source metadata and verification date:
 
 ```yaml
 pricing:
   roles:
-    cheap_builder:flex:
-      provider: "google-gemini"
-      model: "gemini-3.1-flash-lite"
-      inference_tier: "flex"
-      input_usd_per_1m_tokens: 0.125
-      output_usd_per_1m_tokens: 0.75
-      max_output_tokens: 4000
-      budget_pool: "cheap_builder"
-    cheap_builder:standard:
-      provider: "google-gemini"
-      model: "gemini-3.1-flash-lite"
-      inference_tier: "standard"
-      input_usd_per_1m_tokens: 0.25
-      output_usd_per_1m_tokens: 1.50
-      max_output_tokens: 4000
-      budget_pool: "cheap_builder"
+    general_builder:flex:
+      provider: "openai"
+      model: "gpt-5.4-mini"
+      service_tier: "flex"
+      input_usd_per_1m_tokens: 0.375
+      cached_input_usd_per_1m_tokens: 0.0375
+      output_usd_per_1m_tokens: 2.25
+      max_output_tokens: 6000
+      budget_pool: "builder"
+      source_url: "https://developers.openai.com/api/docs/pricing"
+      retrieved_or_verified_date: "2026-05-11"
 ```
 
-The orchestrator never falls back to GPT-5.5 for builder work. Expensive models
-remain outside the cheap builder path.
+Frontier/pro roles are diagnosis/review-only by default and do not become automatic builders.
 
 ## Budget Ledger
 

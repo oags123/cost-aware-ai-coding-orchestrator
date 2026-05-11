@@ -6,6 +6,11 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field
 
+ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh"]
+Verbosity = Literal["low", "medium", "high"]
+ServiceTier = Literal["default", "flex", "priority", "batch"]
+BuilderExecutionBackend = Literal["legacy_opencode", "role_provider", "auto"]
+
 
 class TimeoutSettings(BaseModel):
     max_task_runtime_seconds: int = 600
@@ -18,6 +23,7 @@ class RetrySettings(BaseModel):
 
 
 class BudgetSettings(BaseModel):
+    schema_version: int = 2
     max_task_cost_usd: float = 0.10
     max_project_cost_usd: float = 5.0
     stop_threshold_ratio: float = 0.9
@@ -27,6 +33,26 @@ class BudgetSettings(BaseModel):
     cheap_builder_budget_usd: float = 3.0
     expensive_reviewer_budget_usd: float = 1.0
     emergency_budget_usd: float = 1.0
+    role_budgets_usd: dict[str, float] = Field(
+        default_factory=lambda: {
+            "worker": 1.0,
+            "builder": 3.0,
+            "reviewer": 1.0,
+            "emergency": 1.0,
+            "mechanical_worker": 1.0,
+            "simple_builder": 3.0,
+            "general_builder": 3.0,
+            "coding_optimized_builder": 3.0,
+            "frontier_reviewer": 1.0,
+            "frontier_coding_reviewer": 1.0,
+            "ultra_cheap_classifier": 1.0,
+            "frontier_balanced_reviewer": 1.0,
+            "emergency_pro_reviewer": 0.5,
+            "legacy_reasoning_fallback": 0.5,
+            "non_reasoning_instruction_follower": 0.5,
+            "mini_legacy_fallback": 0.5,
+        }
+    )
 
 
 class LimitSettings(BaseModel):
@@ -108,10 +134,17 @@ class ModelPricing(BaseModel):
     provider: str
     model: str
     inference_tier: str | None = None
+    service_tier: ServiceTier | None = None
     input_usd_per_1m_tokens: float
+    cached_input_usd_per_1m_tokens: float | None = None
     output_usd_per_1m_tokens: float
+    long_context_input_usd_per_1m_tokens: float | None = None
+    long_context_cached_input_usd_per_1m_tokens: float | None = None
+    long_context_output_usd_per_1m_tokens: float | None = None
     max_output_tokens: int
     budget_pool: str
+    source_url: str = "https://developers.openai.com/api/docs/pricing"
+    retrieved_or_verified_date: str = "2026-05-11"
 
 
 class PricingSettings(BaseModel):
@@ -143,8 +176,515 @@ class PricingSettings(BaseModel):
                 max_output_tokens=1500,
                 budget_pool="expensive_reviewer",
             ),
+            "mechanical_worker:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-nano",
+                service_tier="flex",
+                input_usd_per_1m_tokens=0.10,
+                cached_input_usd_per_1m_tokens=0.01,
+                output_usd_per_1m_tokens=0.625,
+                max_output_tokens=1500,
+                budget_pool="worker",
+            ),
+            "mechanical_worker:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-nano",
+                service_tier="default",
+                input_usd_per_1m_tokens=0.20,
+                cached_input_usd_per_1m_tokens=0.02,
+                output_usd_per_1m_tokens=1.25,
+                max_output_tokens=1500,
+                budget_pool="worker",
+            ),
+            "ultra_cheap_classifier:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5-nano",
+                service_tier="flex",
+                input_usd_per_1m_tokens=0.025,
+                cached_input_usd_per_1m_tokens=0.0025,
+                output_usd_per_1m_tokens=0.2,
+                max_output_tokens=1000,
+                budget_pool="worker",
+            ),
+            "ultra_cheap_classifier:default": ModelPricing(
+                provider="openai",
+                model="gpt-5-nano",
+                service_tier="default",
+                input_usd_per_1m_tokens=0.05,
+                cached_input_usd_per_1m_tokens=0.005,
+                output_usd_per_1m_tokens=0.4,
+                max_output_tokens=1000,
+                budget_pool="worker",
+            ),
+            "simple_builder:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-mini",
+                service_tier="flex",
+                input_usd_per_1m_tokens=0.375,
+                cached_input_usd_per_1m_tokens=0.0375,
+                output_usd_per_1m_tokens=2.25,
+                max_output_tokens=3000,
+                budget_pool="builder",
+            ),
+            "simple_builder:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-mini",
+                service_tier="default",
+                input_usd_per_1m_tokens=0.75,
+                cached_input_usd_per_1m_tokens=0.075,
+                output_usd_per_1m_tokens=4.5,
+                max_output_tokens=3000,
+                budget_pool="builder",
+            ),
+            "general_builder:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-mini",
+                service_tier="flex",
+                input_usd_per_1m_tokens=0.375,
+                cached_input_usd_per_1m_tokens=0.0375,
+                output_usd_per_1m_tokens=2.25,
+                max_output_tokens=6000,
+                budget_pool="builder",
+            ),
+            "general_builder:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-mini",
+                service_tier="default",
+                input_usd_per_1m_tokens=0.75,
+                cached_input_usd_per_1m_tokens=0.075,
+                output_usd_per_1m_tokens=4.5,
+                max_output_tokens=6000,
+                budget_pool="builder",
+            ),
+            "general_builder:priority": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-mini",
+                service_tier="priority",
+                input_usd_per_1m_tokens=1.5,
+                cached_input_usd_per_1m_tokens=0.15,
+                output_usd_per_1m_tokens=9.0,
+                max_output_tokens=6000,
+                budget_pool="builder",
+            ),
+            "coding_optimized_builder:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.3-codex",
+                service_tier="default",
+                input_usd_per_1m_tokens=1.75,
+                cached_input_usd_per_1m_tokens=0.175,
+                output_usd_per_1m_tokens=14.0,
+                max_output_tokens=8000,
+                budget_pool="builder",
+            ),
+            "coding_optimized_builder:priority": ModelPricing(
+                provider="openai",
+                model="gpt-5.3-codex",
+                service_tier="priority",
+                input_usd_per_1m_tokens=3.5,
+                cached_input_usd_per_1m_tokens=0.35,
+                output_usd_per_1m_tokens=28.0,
+                max_output_tokens=8000,
+                budget_pool="builder",
+            ),
+            "frontier_coding_reviewer:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.3-codex",
+                service_tier="default",
+                input_usd_per_1m_tokens=1.75,
+                cached_input_usd_per_1m_tokens=0.175,
+                output_usd_per_1m_tokens=14.0,
+                max_output_tokens=8000,
+                budget_pool="reviewer",
+            ),
+            "frontier_coding_reviewer:priority": ModelPricing(
+                provider="openai",
+                model="gpt-5.3-codex",
+                service_tier="priority",
+                input_usd_per_1m_tokens=3.5,
+                cached_input_usd_per_1m_tokens=0.35,
+                output_usd_per_1m_tokens=28.0,
+                max_output_tokens=8000,
+                budget_pool="reviewer",
+            ),
+            "frontier_balanced_reviewer:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5.4",
+                service_tier="flex",
+                input_usd_per_1m_tokens=1.25,
+                cached_input_usd_per_1m_tokens=0.13,
+                output_usd_per_1m_tokens=7.5,
+                long_context_input_usd_per_1m_tokens=2.5,
+                long_context_cached_input_usd_per_1m_tokens=0.25,
+                long_context_output_usd_per_1m_tokens=11.25,
+                max_output_tokens=6000,
+                budget_pool="reviewer",
+            ),
+            "frontier_balanced_reviewer:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.4",
+                service_tier="default",
+                input_usd_per_1m_tokens=2.5,
+                cached_input_usd_per_1m_tokens=0.25,
+                output_usd_per_1m_tokens=15.0,
+                long_context_input_usd_per_1m_tokens=5.0,
+                long_context_cached_input_usd_per_1m_tokens=0.5,
+                long_context_output_usd_per_1m_tokens=22.5,
+                max_output_tokens=6000,
+                budget_pool="reviewer",
+            ),
+            "frontier_balanced_reviewer:priority": ModelPricing(
+                provider="openai",
+                model="gpt-5.4",
+                service_tier="priority",
+                input_usd_per_1m_tokens=5.0,
+                cached_input_usd_per_1m_tokens=0.5,
+                output_usd_per_1m_tokens=30.0,
+                max_output_tokens=6000,
+                budget_pool="reviewer",
+            ),
+            "frontier_reviewer:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5.5",
+                service_tier="flex",
+                input_usd_per_1m_tokens=2.5,
+                cached_input_usd_per_1m_tokens=0.25,
+                output_usd_per_1m_tokens=15.0,
+                long_context_input_usd_per_1m_tokens=5.0,
+                long_context_cached_input_usd_per_1m_tokens=0.5,
+                long_context_output_usd_per_1m_tokens=22.5,
+                max_output_tokens=4000,
+                budget_pool="reviewer",
+            ),
+            "frontier_reviewer:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.5",
+                service_tier="default",
+                input_usd_per_1m_tokens=5.0,
+                cached_input_usd_per_1m_tokens=0.5,
+                output_usd_per_1m_tokens=30.0,
+                long_context_input_usd_per_1m_tokens=10.0,
+                long_context_cached_input_usd_per_1m_tokens=1.0,
+                long_context_output_usd_per_1m_tokens=45.0,
+                max_output_tokens=4000,
+                budget_pool="reviewer",
+            ),
+            "frontier_reviewer:priority": ModelPricing(
+                provider="openai",
+                model="gpt-5.5",
+                service_tier="priority",
+                input_usd_per_1m_tokens=12.5,
+                cached_input_usd_per_1m_tokens=1.25,
+                output_usd_per_1m_tokens=75.0,
+                max_output_tokens=4000,
+                budget_pool="reviewer",
+            ),
+            "emergency_pro_reviewer:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5.5-pro",
+                service_tier="flex",
+                input_usd_per_1m_tokens=15.0,
+                cached_input_usd_per_1m_tokens=None,
+                output_usd_per_1m_tokens=90.0,
+                max_output_tokens=8000,
+                budget_pool="emergency",
+            ),
+            "emergency_pro_reviewer:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.5-pro",
+                service_tier="default",
+                input_usd_per_1m_tokens=30.0,
+                cached_input_usd_per_1m_tokens=None,
+                output_usd_per_1m_tokens=180.0,
+                long_context_input_usd_per_1m_tokens=60.0,
+                long_context_cached_input_usd_per_1m_tokens=None,
+                long_context_output_usd_per_1m_tokens=270.0,
+                max_output_tokens=8000,
+                budget_pool="emergency",
+            ),
+            "emergency_pro_reviewer:batch": ModelPricing(
+                provider="openai",
+                model="gpt-5.5-pro",
+                service_tier="batch",
+                input_usd_per_1m_tokens=15.0,
+                cached_input_usd_per_1m_tokens=None,
+                output_usd_per_1m_tokens=90.0,
+                max_output_tokens=8000,
+                budget_pool="emergency",
+            ),
+            "legacy_reasoning_fallback:default": ModelPricing(
+                provider="openai",
+                model="gpt-5",
+                service_tier="default",
+                input_usd_per_1m_tokens=1.25,
+                cached_input_usd_per_1m_tokens=0.125,
+                output_usd_per_1m_tokens=10.0,
+                max_output_tokens=4000,
+                budget_pool="builder",
+            ),
+            "mini_legacy_fallback:default": ModelPricing(
+                provider="openai",
+                model="gpt-5-mini",
+                service_tier="default",
+                input_usd_per_1m_tokens=0.25,
+                cached_input_usd_per_1m_tokens=0.025,
+                output_usd_per_1m_tokens=2.0,
+                max_output_tokens=4000,
+                budget_pool="builder",
+            ),
+            "non_reasoning_instruction_follower:default": ModelPricing(
+                provider="openai",
+                model="gpt-4.1",
+                service_tier="default",
+                input_usd_per_1m_tokens=2.0,
+                cached_input_usd_per_1m_tokens=0.5,
+                output_usd_per_1m_tokens=8.0,
+                max_output_tokens=4000,
+                budget_pool="builder",
+            ),
         }
     )
+
+
+class OpenAIProviderSettings(BaseModel):
+    enabled: bool = True
+    runtime_enabled: bool = False
+    api_key_env_var: str = "OPENAI_API_KEY"
+    base_url: str | None = None
+    request_timeout_seconds: int = 300
+    max_retries: int = 0
+
+
+class ProviderSettings(BaseModel):
+    openai: OpenAIProviderSettings = Field(default_factory=OpenAIProviderSettings)
+
+
+class ModelAliasSettings(BaseModel):
+    openai_ultra_cheap_legacy: str = "gpt-5-nano"
+    openai_nano: str = "gpt-5.4-nano"
+    openai_mini_legacy: str = "gpt-5-mini"
+    openai_mini: str = "gpt-5.4-mini"
+    openai_codex: str = "gpt-5.3-codex"
+    openai_frontier_balanced: str = "gpt-5.4"
+    openai_frontier: str = "gpt-5.5"
+    openai_frontier_pro: str = "gpt-5.5-pro"
+    openai_legacy_reasoning: str = "gpt-5"
+    openai_non_reasoning: str = "gpt-4.1"
+
+
+class ModelRoleSettings(BaseModel):
+    provider: str = "openai"
+    model_alias: str
+    purpose: str
+    max_input_tokens: int
+    max_output_tokens: int
+    max_context_chars: int
+    reasoning_effort: ReasoningEffort = "low"
+    verbosity: Verbosity = "medium"
+    structured_output: bool = True
+    allow_tools: bool = False
+    allow_direct_patch: bool = True
+    budget_pool: str
+    default_service_tier: ServiceTier = "default"
+    fallback_service_tier: ServiceTier | None = None
+    max_attempts: int = 2
+    manual_approval_required: bool = False
+
+
+class ResolvedModelRole(BaseModel):
+    role_name: str
+    provider: str
+    model: str
+    model_alias: str
+    purpose: str
+    max_input_tokens: int
+    max_output_tokens: int
+    max_context_chars: int
+    reasoning_effort: ReasoningEffort
+    verbosity: Verbosity
+    structured_output: bool
+    allow_tools: bool
+    allow_direct_patch: bool
+    budget_pool: str
+    service_tier: ServiceTier
+    fallback_service_tier: ServiceTier | None = None
+    max_attempts: int
+
+
+class ModelRoleRegistry(BaseModel):
+    roles: dict[str, ModelRoleSettings] = Field(
+        default_factory=lambda: {
+            "mechanical_worker": ModelRoleSettings(
+                model_alias="openai_nano",
+                purpose="tiny deterministic coding tasks and bounded tiny patches",
+                max_input_tokens=16_000,
+                max_output_tokens=1_500,
+                max_context_chars=64_000,
+                reasoning_effort="low",
+                verbosity="low",
+                budget_pool="worker",
+                default_service_tier="flex",
+                fallback_service_tier="default",
+            ),
+            "ultra_cheap_classifier": ModelRoleSettings(
+                model_alias="openai_ultra_cheap_legacy",
+                purpose="ultra-cheap classification and summarization only",
+                max_input_tokens=12_000,
+                max_output_tokens=1_000,
+                max_context_chars=48_000,
+                reasoning_effort="none",
+                verbosity="low",
+                allow_direct_patch=False,
+                budget_pool="worker",
+                default_service_tier="flex",
+                fallback_service_tier="default",
+            ),
+            "simple_builder": ModelRoleSettings(
+                model_alias="openai_mini",
+                purpose="small local Python patches, helpers, and validators",
+                max_input_tokens=32_000,
+                max_output_tokens=3_000,
+                max_context_chars=128_000,
+                reasoning_effort="low",
+                verbosity="low",
+                budget_pool="builder",
+                default_service_tier="flex",
+                fallback_service_tier="default",
+            ),
+            "general_builder": ModelRoleSettings(
+                model_alias="openai_mini",
+                purpose="normal coding tasks and guided repairs",
+                max_input_tokens=64_000,
+                max_output_tokens=6_000,
+                max_context_chars=256_000,
+                reasoning_effort="low",
+                verbosity="medium",
+                budget_pool="builder",
+                default_service_tier="flex",
+                fallback_service_tier="default",
+            ),
+            "coding_optimized_builder": ModelRoleSettings(
+                model_alias="openai_codex",
+                purpose="coding-optimized patch generation when available",
+                max_input_tokens=64_000,
+                max_output_tokens=8_000,
+                max_context_chars=400_000,
+                reasoning_effort="medium",
+                verbosity="medium",
+                budget_pool="builder",
+            ),
+            "frontier_coding_reviewer": ModelRoleSettings(
+                model_alias="openai_codex",
+                purpose="difficult coding diagnosis and risky multi-file patch review",
+                max_input_tokens=128_000,
+                max_output_tokens=8_000,
+                max_context_chars=400_000,
+                reasoning_effort="high",
+                verbosity="medium",
+                allow_direct_patch=False,
+                budget_pool="reviewer",
+                max_attempts=1,
+            ),
+            "frontier_balanced_reviewer": ModelRoleSettings(
+                model_alias="openai_frontier_balanced",
+                purpose="cost-conscious architecture-lite and large context review",
+                max_input_tokens=256_000,
+                max_output_tokens=6_000,
+                max_context_chars=1_000_000,
+                reasoning_effort="medium",
+                verbosity="medium",
+                allow_direct_patch=False,
+                budget_pool="reviewer",
+                max_attempts=1,
+            ),
+            "frontier_reviewer": ModelRoleSettings(
+                model_alias="openai_frontier",
+                purpose="architecture, planning, difficult diagnosis, and review",
+                max_input_tokens=256_000,
+                max_output_tokens=8_000,
+                max_context_chars=1_000_000,
+                reasoning_effort="medium",
+                verbosity="medium",
+                allow_direct_patch=False,
+                budget_pool="reviewer",
+                max_attempts=1,
+            ),
+            "emergency_pro_reviewer": ModelRoleSettings(
+                model_alias="openai_frontier_pro",
+                purpose="manual approval only final adjudication for hard blockers",
+                max_input_tokens=128_000,
+                max_output_tokens=8_000,
+                max_context_chars=1_000_000,
+                reasoning_effort="high",
+                verbosity="medium",
+                allow_direct_patch=False,
+                budget_pool="emergency",
+                default_service_tier="default",
+                fallback_service_tier="batch",
+                max_attempts=1,
+                manual_approval_required=True,
+            ),
+            "legacy_reasoning_fallback": ModelRoleSettings(
+                model_alias="openai_legacy_reasoning",
+                purpose="legacy compatibility fallback only",
+                max_input_tokens=64_000,
+                max_output_tokens=4_000,
+                max_context_chars=256_000,
+                reasoning_effort="medium",
+                verbosity="medium",
+                budget_pool="builder",
+                default_service_tier="default",
+                fallback_service_tier=None,
+            ),
+            "mini_legacy_fallback": ModelRoleSettings(
+                model_alias="openai_mini_legacy",
+                purpose="legacy gpt-5-mini compatibility fallback only",
+                max_input_tokens=64_000,
+                max_output_tokens=4_000,
+                max_context_chars=256_000,
+                reasoning_effort="low",
+                verbosity="medium",
+                allow_direct_patch=False,
+                budget_pool="builder",
+                default_service_tier="default",
+                fallback_service_tier=None,
+            ),
+            "non_reasoning_instruction_follower": ModelRoleSettings(
+                model_alias="openai_non_reasoning",
+                purpose="deterministic instruction-following fallback without reasoning",
+                max_input_tokens=64_000,
+                max_output_tokens=4_000,
+                max_context_chars=256_000,
+                reasoning_effort="none",
+                verbosity="medium",
+                allow_direct_patch=False,
+                budget_pool="builder",
+                default_service_tier="default",
+                fallback_service_tier=None,
+            ),
+        }
+    )
+
+
+class ServiceTierPolicySettings(BaseModel):
+    budget_optimization_enabled: bool = True
+    default_builder_tier: ServiceTier = "flex"
+    fallback_builder_tier: ServiceTier = "default"
+    priority_enabled: bool = False
+    max_flex_timeouts_before_fallback: int = 2
+    max_priority_cost_usd_per_run: float = 0.0
+
+
+class PolicySettings(BaseModel):
+    allow_frontier_direct_patch: bool = False
+    allow_xhigh_reasoning: bool = False
+    allow_emergency_pro_reviewer: bool = False
+    builder_execution_backend: BuilderExecutionBackend = "legacy_opencode"
+    provider_fallback_to_opencode: bool = True
+    service_tiers: ServiceTierPolicySettings = Field(default_factory=ServiceTierPolicySettings)
+
+
+class ConfigResolutionError(ValueError):
+    pass
 
 
 class ValidationSettings(BaseModel):
@@ -196,9 +736,14 @@ class GitSettings(BaseModel):
 
 
 class AppConfig(BaseModel):
+    schema_version: int = 2
     repo_path: str = "."
     state_path: str = "logs/state.json"
     log_path: str = "logs/orchestrator.jsonl"
+    providers: ProviderSettings = Field(default_factory=ProviderSettings)
+    model_aliases: ModelAliasSettings = Field(default_factory=ModelAliasSettings)
+    model_roles: ModelRoleRegistry = Field(default_factory=ModelRoleRegistry)
+    policies: PolicySettings = Field(default_factory=PolicySettings)
     model_routing: ModelRoutingSettings = Field(default_factory=ModelRoutingSettings)
     timeouts: TimeoutSettings = Field(default_factory=TimeoutSettings)
     retries: RetrySettings = Field(default_factory=RetrySettings)
@@ -213,6 +758,49 @@ class AppConfig(BaseModel):
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)
     opencode: OpenCodeSettings = Field(default_factory=OpenCodeSettings)
     git: GitSettings = Field(default_factory=GitSettings)
+
+
+def resolve_model_role(
+    config: AppConfig,
+    role_name: str,
+    *,
+    service_tier: ServiceTier | None = None,
+) -> ResolvedModelRole:
+    role = config.model_roles.roles.get(role_name)
+    if role is None:
+        raise ConfigResolutionError(f"Unknown model role: {role_name}")
+
+    aliases = config.model_aliases.model_dump()
+    model = aliases.get(role.model_alias)
+    if not isinstance(model, str) or not model:
+        raise ConfigResolutionError(
+            f"Model role {role_name!r} references unknown model alias: {role.model_alias!r}"
+        )
+
+    selected_service_tier = service_tier or role.default_service_tier
+    return ResolvedModelRole(
+        role_name=role_name,
+        provider=role.provider,
+        model=model,
+        model_alias=role.model_alias,
+        purpose=role.purpose,
+        max_input_tokens=role.max_input_tokens,
+        max_output_tokens=role.max_output_tokens,
+        max_context_chars=role.max_context_chars,
+        reasoning_effort=role.reasoning_effort,
+        verbosity=role.verbosity,
+        structured_output=role.structured_output,
+        allow_tools=role.allow_tools,
+        allow_direct_patch=(
+            role.allow_direct_patch and config.policies.allow_frontier_direct_patch
+            if role_name.startswith("frontier_")
+            else role.allow_direct_patch
+        ),
+        budget_pool=role.budget_pool,
+        service_tier=selected_service_tier,
+        fallback_service_tier=role.fallback_service_tier,
+        max_attempts=role.max_attempts,
+    )
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

@@ -449,6 +449,9 @@ class BudgetGuard:
         return pricing
 
     def _role_budget(self, model_role: str) -> float:
+        configured_role_budget = self.settings.role_budgets_usd.get(model_role)
+        if configured_role_budget is not None:
+            return configured_role_budget
         if model_role == "cheap_builder":
             return self.settings.cheap_builder_budget_usd
         if model_role == "expensive_reviewer":

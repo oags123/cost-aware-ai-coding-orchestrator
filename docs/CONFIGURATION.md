@@ -22,6 +22,44 @@ Config is YAML and loaded from `config.yaml` by default. If no config file exist
 - `opencode` - dry-run and real OpenCode execution settings.
 - `git` - dirty-worktree and rollback preservation settings.
 
+## OpenAI Model Catalog (Phase 2.5)
+
+Model aliases are capability-driven and model IDs are current OpenAI defaults:
+
+```yaml
+model_aliases:
+  openai_ultra_cheap_legacy: "gpt-5-nano"
+  openai_nano: "gpt-5.4-nano"
+  openai_mini_legacy: "gpt-5-mini"
+  openai_mini: "gpt-5.4-mini"
+  openai_codex: "gpt-5.3-codex"
+  openai_frontier_balanced: "gpt-5.4"
+  openai_frontier: "gpt-5.5"
+  openai_frontier_pro: "gpt-5.5-pro"
+  openai_legacy_reasoning: "gpt-5"
+  openai_non_reasoning: "gpt-4.1"
+```
+
+Reasoning is request-level policy (`reasoning_effort`), not part of the model ID.
+`gpt-5.3-codex` with `medium` and `high` reasoning uses the same model string.
+
+## Role Defaults (Phase 2.5)
+
+- `mechanical_worker` defaults to `gpt-5.4-nano` (`flex`, low/none reasoning).
+- `simple_builder` and `general_builder` default to `gpt-5.4-mini`.
+- `coding_optimized_builder` and `frontier_coding_reviewer` default to `gpt-5.3-codex`.
+- `frontier_reviewer` defaults to `gpt-5.5`.
+- `emergency_pro_reviewer` maps to `gpt-5.5-pro` and requires manual approval.
+
+Policy guardrails:
+
+```yaml
+policies:
+  allow_frontier_direct_patch: false
+  allow_xhigh_reasoning: false
+  allow_emergency_pro_reviewer: false
+```
+
 ## OpenCode Settings
 
 OpenCode is installed and authenticated separately from this package. See
