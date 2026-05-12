@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -7,37 +8,49 @@ import pytest
 from coding_orchestrator.config import (
     AppConfig,
     BudgetSettings,
-    CheapBuilderTierSettings,
+    BuilderServiceTierSettings,
     FlexTierSettings,
     ModelPricing,
-    OpenCodeSettings,
     PricingSettings,
 )
+from coding_orchestrator.models.fake_provider import FakeModelProvider
+from coding_orchestrator.models.provider import ProviderError, ProviderRequest
 from coding_orchestrator.orchestrator.engine import WorkflowEngine
-from coding_orchestrator.schemas import BuilderResult, TaskSpec
-from coding_orchestrator.tools.opencode_runner import OpenCodeExecutionError, OpenCodeRunner
+from coding_orchestrator.schemas import TaskSpec
+
+
+def init_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+    target = path / "app.py"
+    target.write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
 
 
 def pricing(output_tokens: int = 100) -> PricingSettings:
     return PricingSettings(
         roles={
-            "cheap_builder:flex": ModelPricing(
-                provider="google-gemini",
-                model="gemini-3.1-flash-lite",
+            "simple_builder:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-mini",
                 inference_tier="flex",
-                input_usd_per_1m_tokens=0.125,
-                output_usd_per_1m_tokens=0.75,
+                service_tier="flex",
+                input_usd_per_1m_tokens=0.375,
+                output_usd_per_1m_tokens=2.25,
                 max_output_tokens=output_tokens,
-                budget_pool="cheap_builder",
+                budget_pool="builder",
             ),
-            "cheap_builder:standard": ModelPricing(
-                provider="google-gemini",
-                model="gemini-3.1-flash-lite",
-                inference_tier="standard",
-                input_usd_per_1m_tokens=0.25,
-                output_usd_per_1m_tokens=1.50,
+            "simple_builder:default": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-mini",
+                inference_tier="default",
+                service_tier="default",
+                input_usd_per_1m_tokens=0.75,
+                output_usd_per_1m_tokens=4.50,
                 max_output_tokens=output_tokens,
-                budget_pool="cheap_builder",
+                budget_pool="builder",
             ),
         }
     )
@@ -45,7 +58,7 @@ def pricing(output_tokens: int = 100) -> PricingSettings:
 
 def config(
     tmp_path: Path,
-    tier_settings: CheapBuilderTierSettings | None = None,
+    tier_settings: BuilderServiceTierSettings | None = None,
     output_tokens: int = 100,
 ) -> AppConfig:
     return AppConfig(
@@ -56,38 +69,42 @@ def config(
             ledger_path=str(tmp_path / "budget.sqlite"),
             project_id="tier-tests",
             project_total_budget_usd=10.0,
-            cheap_builder_budget_usd=10.0,
+            role_budgets_usd={"simple_builder": 10.0},
             max_task_cost_usd=10.0,
             max_project_cost_usd=10.0,
         ),
         inference=AppConfig().inference.model_copy(
-            update={"cheap_builder": tier_settings or CheapBuilderTierSettings()}
+            update={"builder_service_tier": tier_settings or BuilderServiceTierSettings()}
         ),
         pricing=pricing(output_tokens),
-        opencode=OpenCodeSettings(enabled=False, dry_run=True),
     )
 
 
 def test_flex_selected_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    engine = WorkflowEngine(config(tmp_path))
+    init_repo(tmp_path)
+    provider = FakeModelProvider([""])
+    engine = WorkflowEngine(config(tmp_path), provider_overrides={"openai": provider})
     monkeypatch.setattr(engine, "_validate", lambda task: [])
     monkeypatch.setattr(engine, "_commit", lambda task, state: None)
 
-    state = engine.run_task(TaskSpec(id="T-FLEX", title="Fix bug", max_cost_usd=10))
+    state = engine.run_task(
+        TaskSpec(id="T-FLEX", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
+    )
 
     assert state.final_status == "completed"
     assert state.tool_results["builder"]["tier"] == "flex"
-    assert state.tool_results["builder"]["model"] == "gemini-3.1-flash-lite"
+    assert state.tool_results["builder"]["service_tier"] == "flex"
 
 
-def test_standard_fallback_after_flex_timeout_threshold(
+def test_default_service_tier_fallback_after_flex_timeout_threshold(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    init_repo(tmp_path)
     engine = WorkflowEngine(
         config(
             tmp_path,
-            CheapBuilderTierSettings(
+            BuilderServiceTierSettings(
                 flex=FlexTierSettings(max_consecutive_timeouts=1, timeout_rate_threshold=1.0)
             ),
         )
@@ -95,84 +112,100 @@ def test_standard_fallback_after_flex_timeout_threshold(
     monkeypatch.setattr(engine, "_validate", lambda task: [])
     monkeypatch.setattr(engine, "_commit", lambda task, state: None)
 
-    def fake_run(self: OpenCodeRunner, task: TaskSpec, context: str) -> BuilderResult:
-        if self.settings and self.settings.max_runtime_seconds == 600:
-            raise OpenCodeExecutionError("flex timeout", timed_out=True)
-        return BuilderResult(
-            text="",
-            confidence=0.0,
-            estimated_output_tokens=1,
-            dry_run=True,
-        )
+    call_count = {"n": 0}
 
-    monkeypatch.setattr(OpenCodeRunner, "run_bounded_step", fake_run)
+    def flaky_generate(request: ProviderRequest):  # type: ignore[no-untyped-def]
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise ProviderError("429 resource unavailable on flex tier")
+        return FakeModelProvider([""]).generate(request)
 
-    state = engine.run_task(TaskSpec(id="T-STANDARD", title="Fix bug", max_cost_usd=10))
+    monkeypatch.setattr(engine.openai_provider, "generate", flaky_generate)
+
+    state = engine.run_task(
+        TaskSpec(id="T-STANDARD", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
+    )
 
     assert state.final_status == "completed"
     assert state.tool_results["builder"]["tier"] == "standard"
+    assert state.tool_results["builder"]["service_tier"] == "default"
     report = engine.budget_report()
-    assert report.flex_timeouts == 1
-    assert report.standard_fallbacks == 1
+    assert report.service_tier_timeouts.get("flex", 0) == 1
+    assert report.service_tier_fallbacks == 1
 
 
-def test_standard_fallback_blocked_by_cost_budget(
+def test_default_fallback_blocked_by_cost_budget(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    init_repo(tmp_path)
     engine = WorkflowEngine(
         config(
             tmp_path,
-            CheapBuilderTierSettings(
+            BuilderServiceTierSettings(
                 flex=FlexTierSettings(max_consecutive_timeouts=1),
                 max_standard_fallback_cost_usd_per_run=0.000001,
             ),
         )
     )
 
-    def fake_run(self: OpenCodeRunner, task: TaskSpec, context: str) -> BuilderResult:
-        raise OpenCodeExecutionError("flex timeout", timed_out=True)
+    monkeypatch.setattr(
+        engine.openai_provider,
+        "generate",
+        lambda request: (_ for _ in ()).throw(ProviderError("timeout on flex request")),
+    )
 
-    monkeypatch.setattr(OpenCodeRunner, "run_bounded_step", fake_run)
-
-    state = engine.run_task(TaskSpec(id="T-COST", title="Fix bug", max_cost_usd=10))
+    state = engine.run_task(
+        TaskSpec(id="T-COST", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
+    )
 
     assert state.final_status == "blocked"
-    assert "standard fallback cost budget" in state.validation_results["budget"]["message"]
+    assert "service tier fallback cost budget" in state.validation_results["budget"]["message"]
 
 
-def test_standard_fallback_blocked_by_count_limit(
+def test_default_fallback_blocked_by_count_limit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    init_repo(tmp_path)
     engine = WorkflowEngine(
         config(
             tmp_path,
-            CheapBuilderTierSettings(
+            BuilderServiceTierSettings(
                 flex=FlexTierSettings(max_consecutive_timeouts=1),
                 max_standard_fallbacks_per_run=0,
             ),
         )
     )
 
-    def fake_run(self: OpenCodeRunner, task: TaskSpec, context: str) -> BuilderResult:
-        raise OpenCodeExecutionError("flex timeout", timed_out=True)
+    monkeypatch.setattr(
+        engine.openai_provider,
+        "generate",
+        lambda request: (_ for _ in ()).throw(ProviderError("timeout on flex request")),
+    )
 
-    monkeypatch.setattr(OpenCodeRunner, "run_bounded_step", fake_run)
-
-    state = engine.run_task(TaskSpec(id="T-COUNT", title="Fix bug", max_cost_usd=10))
+    state = engine.run_task(
+        TaskSpec(id="T-COUNT", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
+    )
 
     assert state.final_status == "blocked"
-    assert "standard fallback limit" in state.validation_results["budget"]["message"]
+    assert "service tier fallback limit" in state.validation_results["budget"]["message"]
 
 
-def test_report_includes_tier_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    engine = WorkflowEngine(config(tmp_path))
+def test_report_includes_service_tier_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    init_repo(tmp_path)
+    provider = FakeModelProvider([""])
+    engine = WorkflowEngine(config(tmp_path), provider_overrides={"openai": provider})
     monkeypatch.setattr(engine, "_validate", lambda task: [])
     monkeypatch.setattr(engine, "_commit", lambda task, state: None)
 
-    engine.run_task(TaskSpec(id="T-REPORT", title="Fix bug", max_cost_usd=10))
+    engine.run_task(
+        TaskSpec(id="T-REPORT", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
+    )
     report = engine.budget_report()
 
-    assert report.calls_by_tier["flex"] == 1
-    assert report.estimated_cost_by_tier_usd["flex"] > 0
+    assert report.calls_by_service_tier["flex"] == 1
+    assert report.estimated_cost_by_service_tier_usd["flex"] > 0

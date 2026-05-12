@@ -22,10 +22,10 @@ from coding_orchestrator.models.provider import (
 def test_default_openai_model_roles_are_configured() -> None:
     config = AppConfig()
 
-    assert config.schema_version == 2
+    assert config.schema_version == 3
     assert config.providers.openai.api_key_env_var == "OPENAI_API_KEY"
     assert not config.providers.openai.runtime_enabled
-    assert config.model_aliases.openai_ultra_cheap_legacy == "gpt-5-nano"
+    assert config.model_aliases.openai_classifier_nano == "gpt-5-nano"
     assert config.model_aliases.openai_nano == "gpt-5.4-nano"
     assert config.model_aliases.openai_mini == "gpt-5.4-mini"
     assert config.model_aliases.openai_codex == "gpt-5.3-codex"
@@ -97,7 +97,7 @@ def test_role_budgets_and_service_tier_policy_defaults() -> None:
         "coding_optimized_builder": 3.0,
         "frontier_reviewer": 1.0,
         "frontier_coding_reviewer": 1.0,
-        "ultra_cheap_classifier": 1.0,
+        "classification_worker": 1.0,
         "frontier_balanced_reviewer": 1.0,
         "emergency_pro_reviewer": 0.5,
         "legacy_reasoning_fallback": 0.5,
@@ -107,8 +107,7 @@ def test_role_budgets_and_service_tier_policy_defaults() -> None:
     assert config.policies.allow_frontier_direct_patch is False
     assert config.policies.allow_xhigh_reasoning is False
     assert config.policies.allow_emergency_pro_reviewer is False
-    assert config.policies.builder_execution_backend == "legacy_opencode"
-    assert config.policies.provider_fallback_to_opencode
+    assert config.policies.builder_execution_backend == "role_provider"
     assert config.policies.service_tiers.budget_optimization_enabled is True
     assert config.policies.service_tiers.default_builder_tier == "flex"
     assert config.policies.service_tiers.fallback_builder_tier == "default"
@@ -119,9 +118,9 @@ def test_load_config_parses_custom_model_role(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         """
-schema_version: 2
+schema_version: 3
 model_aliases:
-  openai_ultra_cheap_legacy: gpt-5-nano
+  openai_classifier_nano: gpt-5-nano
   openai_nano: gpt-5.4-nano
   openai_mini_legacy: gpt-5-mini
   openai_mini: gpt-5.4-mini
@@ -174,6 +173,64 @@ pricing:
     assert role.default_service_tier == "default"
     assert role.max_attempts == 1
     assert config.pricing.roles["mechanical_worker:default"].cached_input_usd_per_1m_tokens == 0.02
+
+
+def test_load_config_normalizes_legacy_classifier_names(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+schema_version: 3
+model_aliases:
+  openai_ultra_cheap_legacy: gpt-5-nano
+model_roles:
+  roles:
+    ultra_cheap_classifier:
+      provider: openai
+      model_alias: openai_ultra_cheap_legacy
+      purpose: classification and summarization only
+      max_input_tokens: 12000
+      max_output_tokens: 1000
+      max_context_chars: 48000
+      reasoning_effort: none
+      verbosity: low
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: false
+      budget_pool: worker
+      default_service_tier: flex
+      fallback_service_tier: default
+      max_attempts: 2
+budget:
+  role_budgets_usd:
+    ultra_cheap_classifier: 2.5
+pricing:
+  roles:
+    "ultra_cheap_classifier:flex":
+      provider: openai
+      model: gpt-5-nano
+      service_tier: flex
+      input_usd_per_1m_tokens: 0.025
+      cached_input_usd_per_1m_tokens: 0.0025
+      output_usd_per_1m_tokens: 0.20
+      max_output_tokens: 1000
+      budget_pool: worker
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert "classification_worker" in config.model_roles.roles
+    assert "ultra_cheap_classifier" not in config.model_roles.roles
+    assert config.model_aliases.openai_classifier_nano == "gpt-5-nano"
+    assert config.budget.role_budgets_usd["classification_worker"] == 2.5
+    assert "classification_worker:flex" in config.pricing.roles
+
+    resolved = resolve_model_role(config, "ultra_cheap_classifier")
+    assert resolved.role_name == "classification_worker"
+    assert resolved.model_alias == "openai_classifier_nano"
 
 
 def test_resolve_model_role_uses_aliases_and_frontier_patch_policy() -> None:

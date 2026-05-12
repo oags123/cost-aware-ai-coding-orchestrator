@@ -116,7 +116,7 @@ def test_engine_sends_blocked_alert(monkeypatch: pytest.MonkeyPatch, tmp_path: P
             project_id="telegram-tests",
             max_task_cost_usd=0.000001,
             project_total_budget_usd=10,
-            cheap_builder_budget_usd=10,
+            role_budgets_usd={"simple_builder": 10.0},
         ),
         telegram=TelegramSettings(enabled=True),
     )

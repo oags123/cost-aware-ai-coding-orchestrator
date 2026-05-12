@@ -6,12 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from coding_orchestrator.config import AppConfig, BuilderExecutionBackend
+from coding_orchestrator.config import AppConfig
 from coding_orchestrator.models.fake_provider import FakeModelProvider
 from coding_orchestrator.models.provider import BuilderOutput
 from coding_orchestrator.orchestrator.engine import WorkflowEngine
-from coding_orchestrator.schemas import BuilderResult, TaskSpec, ValidationResult
-from coding_orchestrator.tools.opencode_runner import OpenCodeRunner
+from coding_orchestrator.schemas import TaskSpec, ValidationResult
 
 
 def init_repo(path: Path) -> None:
@@ -31,15 +30,12 @@ def commit_file(path: Path, relative: str, content: str) -> None:
 def build_provider_engine(
     tmp_path: Path,
     provider: FakeModelProvider,
-    *,
-    backend: BuilderExecutionBackend = "role_provider",
 ) -> WorkflowEngine:
     config = AppConfig(
         repo_path=str(tmp_path),
         state_path=str(tmp_path / "state.json"),
         log_path=str(tmp_path / "log.jsonl"),
     )
-    config.policies.builder_execution_backend = backend
     return WorkflowEngine(config, provider_overrides={"openai": provider})
 
 
@@ -225,30 +221,21 @@ def test_budget_ledger_records_provider_role_and_service_tier(
     assert row[3] in {"flex", "default"}
 
 
-def test_legacy_opencode_path_remains_default(
+def test_role_provider_backend_is_active_by_default(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     init_repo(tmp_path)
     commit_file(tmp_path, "app.py", "old\n")
-    provider = FakeModelProvider()
-    engine = build_provider_engine(tmp_path, provider, backend="legacy_opencode")
+    provider = FakeModelProvider([""])
+    engine = build_provider_engine(tmp_path, provider)
     task = TaskSpec(id="T-5", title="Fix bug", allowed_files=["app.py"])
 
-    def fake_runner(self: OpenCodeRunner, task: TaskSpec, context: str) -> BuilderResult:
-        return BuilderResult(
-            text="# dry run",
-            confidence=0.1,
-            estimated_output_tokens=10,
-            dry_run=True,
-        )
-
-    monkeypatch.setattr(OpenCodeRunner, "run_bounded_step", fake_runner)
     monkeypatch.setattr(engine, "_validate", lambda task: [])
     monkeypatch.setattr(engine, "_commit", lambda task, state: None)
 
     state = engine.run_task(task)
 
     assert state.final_status == "completed"
-    assert state.tool_results["builder_backend"] == "legacy_opencode"
-    assert state.tool_results["builder_provider"] == "opencode"
+    assert state.tool_results["builder_backend"] == "role_provider"
+    assert state.tool_results["builder_provider"] == "openai"

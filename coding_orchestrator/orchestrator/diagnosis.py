@@ -75,7 +75,7 @@ class ReviewPacketBuilder:
             question={
                 "type": "diagnosis",
                 "prompt": (
-                    "What is the most likely root cause and next cheap-builder instruction? "
+                    "What is the most likely root cause and next guided builder instruction? "
                     "Return structured diagnosis only. Do not produce a patch, shell command, "
                     "file write, or code block."
                 ),
@@ -92,29 +92,38 @@ class DiagnosisReviewer:
         if not self.settings.enabled:
             raise DiagnosisError("diagnosis reviewer is disabled")
         if not self.settings.diagnosis_only:
-            raise DiagnosisError("expensive reviewer must remain diagnosis_only")
+            raise DiagnosisError("frontier reviewer must remain diagnosis_only")
         if self.settings.allow_direct_patch:
-            raise DiagnosisError("direct expensive-reviewer patches are disabled")
+            raise DiagnosisError("direct reviewer patches are disabled")
         if not self.settings.dry_run:
             raise DiagnosisError("real diagnosis reviewer integration is not implemented")
         result = DiagnosisResult(
             root_cause="Dry-run diagnosis placeholder: inspect validator failures and latest diff.",
             minimal_fix_strategy=(
-                "Focus the next cheap-builder attempt on the current failing validators."
+                "Focus the next builder attempt on the current failing validators."
             ),
             files_to_focus=list(packet.task.get("allowed_files", [])),
             risks=["Dry-run diagnosis only; no provider reviewed this packet."],
-            gemini_instruction=(
+            diagnosis_instruction=(
+                "Use the validation failures and allowed files only. Produce the smallest patch "
+                "that addresses the current failing validator output."
+            ),
+            guided_fix_instruction=(
                 "Use the validation failures and allowed files only. Produce the smallest patch "
                 "that addresses the current failing validator output."
             ),
             confidence=0.4,
-            should_retry_with_cheap_builder=True,
+            should_retry_with_builder=True,
             risk_assessment="No real reviewer call was made; treat this as a routing artifact.",
-            recommended_next_instruction=(
+            recommended_next_action=(
                 "Use the validation failures and allowed files only. Produce the smallest patch "
                 "that addresses the current failing validator output."
             ),
+            recommended_role="general_builder",
+            reviewer_instruction=(
+                "Diagnosis-only reviewer guidance. Do not generate direct patches."
+            ),
+            escalation_instruction="Escalate to human if guided builder retry does not converge.",
         )
         return validate_diagnosis_result(result, self.settings)
 
@@ -124,7 +133,7 @@ def validate_diagnosis_result(
     settings: DiagnosisSettings,
 ) -> DiagnosisResult:
     if result.direct_patch_proposed or settings.allow_direct_patch:
-        raise DiagnosisError("direct expensive-reviewer patches are disabled")
+        raise DiagnosisError("direct reviewer patches are disabled")
     text = result.model_dump_json()
     for pattern in FORBIDDEN_DIAGNOSIS_PATTERNS:
         if pattern.search(text):

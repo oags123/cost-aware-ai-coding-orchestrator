@@ -37,15 +37,9 @@ class BudgetUsage(BaseModel):
     project_total_budget_usd: float
     project_total_spend_usd: float
     project_total_remaining_usd: float
-    cheap_builder_budget_usd: float
-    cheap_builder_spend_usd: float
-    cheap_builder_remaining_usd: float
-    expensive_reviewer_budget_usd: float
-    expensive_reviewer_spend_usd: float
-    expensive_reviewer_remaining_usd: float
-    emergency_budget_usd: float
-    emergency_spend_usd: float
-    emergency_remaining_usd: float
+    role_budget_limits_usd: dict[str, float] = Field(default_factory=dict)
+    role_spend_usd: dict[str, float] = Field(default_factory=dict)
+    role_remaining_usd: dict[str, float] = Field(default_factory=dict)
     blocked_calls: int
     limit_failures: dict[str, int] = Field(default_factory=dict)
     largest_context_chars: int = 0
@@ -54,16 +48,16 @@ class BudgetUsage(BaseModel):
     largest_stdout_bytes: int = 0
     largest_stderr_bytes: int = 0
     largest_validation_output_bytes: int = 0
-    calls_by_tier: dict[str, int] = Field(default_factory=dict)
-    estimated_cost_by_tier_usd: dict[str, float] = Field(default_factory=dict)
-    flex_timeouts: int = 0
-    standard_fallbacks: int = 0
+    calls_by_service_tier: dict[str, int] = Field(default_factory=dict)
+    estimated_cost_by_service_tier_usd: dict[str, float] = Field(default_factory=dict)
+    service_tier_timeouts: dict[str, int] = Field(default_factory=dict)
+    service_tier_fallbacks: int = 0
 
 
 class TierUsage(BaseModel):
-    calls_by_tier: dict[str, int] = Field(default_factory=dict)
-    estimated_cost_by_tier_usd: dict[str, float] = Field(default_factory=dict)
-    standard_fallbacks: int = 0
+    calls_by_service_tier: dict[str, int] = Field(default_factory=dict)
+    estimated_cost_by_service_tier_usd: dict[str, float] = Field(default_factory=dict)
+    service_tier_fallbacks: int = 0
 
 
 class BudgetLedger:
@@ -164,34 +158,35 @@ class BudgetLedger:
         largest_stdout_bytes: int = 0,
         largest_stderr_bytes: int = 0,
         largest_validation_output_bytes: int = 0,
-        flex_timeouts: int = 0,
-        standard_fallbacks: int = 0,
+        service_tier_timeouts: dict[str, int] | None = None,
+        service_tier_fallbacks: int = 0,
     ) -> BudgetUsage:
         project_spend = self.spend_for_project(settings.project_id)
-        cheap_spend = self.spend_for_role(settings.project_id, "cheap_builder")
-        expensive_spend = self.spend_for_role(settings.project_id, "expensive_reviewer")
-        emergency_spend = self.spend_for_role(settings.project_id, "emergency")
         largest = self._largest_estimates(settings.project_id)
         ledger_limit_failures = self.limit_failures(settings.project_id)
         combined_limit_failures = dict(ledger_limit_failures)
         for key, count in (limit_failures or {}).items():
             combined_limit_failures[key] = max(combined_limit_failures.get(key, 0), count)
         tier_usage = self.tier_usage(settings.project_id)
+        role_spend = {
+            role_name: self.spend_for_role(settings.project_id, role_name)
+            for role_name in settings.role_budgets_usd
+        }
+        role_remaining = {
+            role_name: settings.role_budgets_usd[role_name] - role_spend.get(role_name, 0.0)
+            for role_name in settings.role_budgets_usd
+        }
+        timeout_counts = dict(tier_usage.calls_by_service_tier)
+        timeout_counts.clear()
+        timeout_counts.update(service_tier_timeouts or {})
         return BudgetUsage(
             project_id=settings.project_id,
             project_total_budget_usd=settings.project_total_budget_usd,
             project_total_spend_usd=project_spend,
             project_total_remaining_usd=settings.project_total_budget_usd - project_spend,
-            cheap_builder_budget_usd=settings.cheap_builder_budget_usd,
-            cheap_builder_spend_usd=cheap_spend,
-            cheap_builder_remaining_usd=settings.cheap_builder_budget_usd - cheap_spend,
-            expensive_reviewer_budget_usd=settings.expensive_reviewer_budget_usd,
-            expensive_reviewer_spend_usd=expensive_spend,
-            expensive_reviewer_remaining_usd=settings.expensive_reviewer_budget_usd
-            - expensive_spend,
-            emergency_budget_usd=settings.emergency_budget_usd,
-            emergency_spend_usd=emergency_spend,
-            emergency_remaining_usd=settings.emergency_budget_usd - emergency_spend,
+            role_budget_limits_usd=dict(settings.role_budgets_usd),
+            role_spend_usd=role_spend,
+            role_remaining_usd=role_remaining,
             blocked_calls=self.blocked_calls(settings.project_id),
             limit_failures=combined_limit_failures,
             largest_context_chars=largest["context_chars"],
@@ -200,10 +195,13 @@ class BudgetLedger:
             largest_stdout_bytes=largest_stdout_bytes,
             largest_stderr_bytes=largest_stderr_bytes,
             largest_validation_output_bytes=largest_validation_output_bytes,
-            calls_by_tier=tier_usage.calls_by_tier,
-            estimated_cost_by_tier_usd=tier_usage.estimated_cost_by_tier_usd,
-            flex_timeouts=flex_timeouts,
-            standard_fallbacks=max(standard_fallbacks, tier_usage.standard_fallbacks),
+            calls_by_service_tier=tier_usage.calls_by_service_tier,
+            estimated_cost_by_service_tier_usd=tier_usage.estimated_cost_by_service_tier_usd,
+            service_tier_timeouts=timeout_counts,
+            service_tier_fallbacks=max(
+                service_tier_fallbacks,
+                tier_usage.service_tier_fallbacks,
+            ),
         )
 
     def tier_usage(self, project_id: str) -> TierUsage:
@@ -222,15 +220,15 @@ class BudgetLedger:
                 """,
                 (project_id,),
             ).fetchall()
-        calls_by_tier: dict[str, int] = {}
-        cost_by_tier: dict[str, float] = {}
+        calls_by_service_tier: dict[str, int] = {}
+        cost_by_service_tier: dict[str, float] = {}
         for tier, calls, cost in rows:
-            calls_by_tier[str(tier)] = int(calls)
-            cost_by_tier[str(tier)] = float(cost)
+            calls_by_service_tier[str(tier)] = int(calls)
+            cost_by_service_tier[str(tier)] = float(cost)
         return TierUsage(
-            calls_by_tier=calls_by_tier,
-            estimated_cost_by_tier_usd=cost_by_tier,
-            standard_fallbacks=calls_by_tier.get("standard", 0),
+            calls_by_service_tier=calls_by_service_tier,
+            estimated_cost_by_service_tier_usd=cost_by_service_tier,
+            service_tier_fallbacks=calls_by_service_tier.get("standard", 0),
         )
 
     def limit_failures(self, project_id: str) -> dict[str, int]:
@@ -344,10 +342,13 @@ class BudgetGuard:
         context: str,
         model_override: str | None = None,
         inference_tier: str | None = None,
+        max_output_tokens_override: int | None = None,
     ) -> BudgetEstimate:
         pricing = self.pricing_for_role(model_role, inference_tier)
         input_tokens = self.estimate_tokens(context)
         output_tokens = pricing.max_output_tokens
+        if max_output_tokens_override is not None:
+            output_tokens = min(output_tokens, max_output_tokens_override)
         input_cost = (input_tokens / 1_000_000.0) * pricing.input_usd_per_1m_tokens
         output_cost = (output_tokens / 1_000_000.0) * pricing.output_usd_per_1m_tokens
         return BudgetEstimate(
@@ -401,8 +402,8 @@ class BudgetGuard:
         largest_stdout_bytes: int = 0,
         largest_stderr_bytes: int = 0,
         largest_validation_output_bytes: int = 0,
-        flex_timeouts: int = 0,
-        standard_fallbacks: int = 0,
+        service_tier_timeouts: dict[str, int] | None = None,
+        service_tier_fallbacks: int = 0,
     ) -> BudgetUsage:
         assert self.ledger is not None
         return self.ledger.usage(
@@ -412,8 +413,8 @@ class BudgetGuard:
             largest_stdout_bytes=largest_stdout_bytes,
             largest_stderr_bytes=largest_stderr_bytes,
             largest_validation_output_bytes=largest_validation_output_bytes,
-            flex_timeouts=flex_timeouts,
-            standard_fallbacks=standard_fallbacks,
+            service_tier_timeouts=service_tier_timeouts,
+            service_tier_fallbacks=service_tier_fallbacks,
         )
 
     def can_spend(self, task: TaskSpec, state: OrchestratorState) -> bool:
@@ -443,6 +444,8 @@ class BudgetGuard:
             pricing = self.pricing.roles.get(f"{model_role}:{inference_tier}")
         if pricing is None:
             pricing = self.pricing.roles.get(model_role)
+        if pricing is None and inference_tier is None:
+            pricing = self.pricing.roles.get(f"{model_role}:default")
         if pricing is None:
             suffix = f":{inference_tier}" if inference_tier else ""
             raise BudgetExceeded(f"No pricing configured for model role: {model_role}{suffix}")
@@ -452,10 +455,4 @@ class BudgetGuard:
         configured_role_budget = self.settings.role_budgets_usd.get(model_role)
         if configured_role_budget is not None:
             return configured_role_budget
-        if model_role == "cheap_builder":
-            return self.settings.cheap_builder_budget_usd
-        if model_role == "expensive_reviewer":
-            return self.settings.expensive_reviewer_budget_usd
-        if model_role == "emergency":
-            return self.settings.emergency_budget_usd
         return self.settings.project_total_budget_usd

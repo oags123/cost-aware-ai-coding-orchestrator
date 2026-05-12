@@ -63,7 +63,7 @@ class ConvergenceEvaluator:
         if current.validation_status == "passed":
             decision = ConvergenceDecision(
                 status="converging",
-                action="continue_cheap_retry",
+                action="continue_current_role_retry",
                 improvement_score=10.0,
                 reason="validation passed",
                 stagnant_attempts=self.stagnant_attempts,
@@ -104,13 +104,13 @@ class ConvergenceEvaluator:
         elif stagnant:
             self.stagnant_attempts += 1
             status = "stagnating"
-            action = "continue_cheap_retry"
+            action = "continue_current_role_retry"
             reasons.append("same failures repeated")
         else:
             self.stagnant_attempts = 0
             self.divergent_attempts = 0
             status = "converging"
-            action = "continue_cheap_retry"
+            action = "continue_current_role_retry"
             if not reasons:
                 reasons.append("retry remains within convergence thresholds")
 

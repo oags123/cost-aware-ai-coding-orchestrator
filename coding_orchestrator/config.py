@@ -9,7 +9,14 @@ from pydantic import BaseModel, Field
 ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh"]
 Verbosity = Literal["low", "medium", "high"]
 ServiceTier = Literal["default", "flex", "priority", "batch"]
-BuilderExecutionBackend = Literal["legacy_opencode", "role_provider", "auto"]
+BuilderExecutionBackend = Literal["role_provider"]
+
+LEGACY_MODEL_ALIAS_RENAMES = {
+    "openai_ultra_cheap_legacy": "openai_classifier_nano",
+}
+LEGACY_ROLE_RENAMES = {
+    "ultra_cheap_classifier": "classification_worker",
+}
 
 
 class TimeoutSettings(BaseModel):
@@ -23,16 +30,13 @@ class RetrySettings(BaseModel):
 
 
 class BudgetSettings(BaseModel):
-    schema_version: int = 2
+    schema_version: int = 3
     max_task_cost_usd: float = 0.10
     max_project_cost_usd: float = 5.0
     stop_threshold_ratio: float = 0.9
     ledger_path: str = "logs/budget.sqlite"
     project_id: str = "default"
     project_total_budget_usd: float = 5.0
-    cheap_builder_budget_usd: float = 3.0
-    expensive_reviewer_budget_usd: float = 1.0
-    emergency_budget_usd: float = 1.0
     role_budgets_usd: dict[str, float] = Field(
         default_factory=lambda: {
             "worker": 1.0,
@@ -45,7 +49,7 @@ class BudgetSettings(BaseModel):
             "coding_optimized_builder": 3.0,
             "frontier_reviewer": 1.0,
             "frontier_coding_reviewer": 1.0,
-            "ultra_cheap_classifier": 1.0,
+            "classification_worker": 1.0,
             "frontier_balanced_reviewer": 1.0,
             "emergency_pro_reviewer": 0.5,
             "legacy_reasoning_fallback": 0.5,
@@ -75,7 +79,7 @@ class FlexTierSettings(BaseModel):
     timeout_rate_threshold: float = 0.5
 
 
-class CheapBuilderTierSettings(BaseModel):
+class BuilderServiceTierSettings(BaseModel):
     default_tier: Literal["flex", "standard"] = "flex"
     fallback_tier: Literal["flex", "standard"] = "standard"
     flex: FlexTierSettings = Field(default_factory=FlexTierSettings)
@@ -84,7 +88,9 @@ class CheapBuilderTierSettings(BaseModel):
 
 
 class InferenceSettings(BaseModel):
-    cheap_builder: CheapBuilderTierSettings = Field(default_factory=CheapBuilderTierSettings)
+    builder_service_tier: BuilderServiceTierSettings = Field(
+        default_factory=BuilderServiceTierSettings
+    )
 
 
 class ConvergenceSettings(BaseModel):
@@ -102,14 +108,14 @@ class DiagnosisSettings(BaseModel):
     dry_run: bool = True
     provider: str = "placeholder"
     model: str = "frontier-reviewer-placeholder"
-    model_role: str = "expensive_reviewer"
+    model_role: str = "frontier_reviewer"
     max_input_tokens: int = 8_000
     max_output_tokens: int = 1_500
     max_context_chars: int = 24_000
     max_cost_per_call_usd: float = 0.25
     max_calls_per_task: int = 1
     max_calls_per_run: int = 2
-    role_budget_pool: str = "expensive_reviewer"
+    role_budget_pool: str = "reviewer"
     diagnosis_only: bool = True
     max_packet_chars: int = 24_000
     max_diff_chars: int = 10_000
@@ -150,32 +156,6 @@ class ModelPricing(BaseModel):
 class PricingSettings(BaseModel):
     roles: dict[str, ModelPricing] = Field(
         default_factory=lambda: {
-            "cheap_builder:flex": ModelPricing(
-                provider="google-gemini",
-                model="gemini-3.1-flash-lite",
-                inference_tier="flex",
-                input_usd_per_1m_tokens=0.125,
-                output_usd_per_1m_tokens=0.75,
-                max_output_tokens=4000,
-                budget_pool="cheap_builder",
-            ),
-            "cheap_builder:standard": ModelPricing(
-                provider="google-gemini",
-                model="gemini-3.1-flash-lite",
-                inference_tier="standard",
-                input_usd_per_1m_tokens=0.25,
-                output_usd_per_1m_tokens=1.50,
-                max_output_tokens=4000,
-                budget_pool="cheap_builder",
-            ),
-            "expensive_reviewer": ModelPricing(
-                provider="placeholder",
-                model="frontier-reviewer-placeholder",
-                input_usd_per_1m_tokens=5.00,
-                output_usd_per_1m_tokens=15.00,
-                max_output_tokens=1500,
-                budget_pool="expensive_reviewer",
-            ),
             "mechanical_worker:flex": ModelPricing(
                 provider="openai",
                 model="gpt-5.4-nano",
@@ -196,7 +176,7 @@ class PricingSettings(BaseModel):
                 max_output_tokens=1500,
                 budget_pool="worker",
             ),
-            "ultra_cheap_classifier:flex": ModelPricing(
+            "classification_worker:flex": ModelPricing(
                 provider="openai",
                 model="gpt-5-nano",
                 service_tier="flex",
@@ -206,7 +186,7 @@ class PricingSettings(BaseModel):
                 max_output_tokens=1000,
                 budget_pool="worker",
             ),
-            "ultra_cheap_classifier:default": ModelPricing(
+            "classification_worker:default": ModelPricing(
                 provider="openai",
                 model="gpt-5-nano",
                 service_tier="default",
@@ -243,7 +223,7 @@ class PricingSettings(BaseModel):
                 input_usd_per_1m_tokens=0.375,
                 cached_input_usd_per_1m_tokens=0.0375,
                 output_usd_per_1m_tokens=2.25,
-                max_output_tokens=6000,
+                max_output_tokens=4000,
                 budget_pool="builder",
             ),
             "general_builder:default": ModelPricing(
@@ -253,7 +233,7 @@ class PricingSettings(BaseModel):
                 input_usd_per_1m_tokens=0.75,
                 cached_input_usd_per_1m_tokens=0.075,
                 output_usd_per_1m_tokens=4.5,
-                max_output_tokens=6000,
+                max_output_tokens=4000,
                 budget_pool="builder",
             ),
             "general_builder:priority": ModelPricing(
@@ -263,7 +243,7 @@ class PricingSettings(BaseModel):
                 input_usd_per_1m_tokens=1.5,
                 cached_input_usd_per_1m_tokens=0.15,
                 output_usd_per_1m_tokens=9.0,
-                max_output_tokens=6000,
+                max_output_tokens=4000,
                 budget_pool="builder",
             ),
             "coding_optimized_builder:default": ModelPricing(
@@ -459,7 +439,7 @@ class ProviderSettings(BaseModel):
 
 
 class ModelAliasSettings(BaseModel):
-    openai_ultra_cheap_legacy: str = "gpt-5-nano"
+    openai_classifier_nano: str = "gpt-5-nano"
     openai_nano: str = "gpt-5.4-nano"
     openai_mini_legacy: str = "gpt-5-mini"
     openai_mini: str = "gpt-5.4-mini"
@@ -525,9 +505,9 @@ class ModelRoleRegistry(BaseModel):
                 default_service_tier="flex",
                 fallback_service_tier="default",
             ),
-            "ultra_cheap_classifier": ModelRoleSettings(
-                model_alias="openai_ultra_cheap_legacy",
-                purpose="ultra-cheap classification and summarization only",
+            "classification_worker": ModelRoleSettings(
+                model_alias="openai_classifier_nano",
+                purpose="classification and summarization only",
                 max_input_tokens=12_000,
                 max_output_tokens=1_000,
                 max_context_chars=48_000,
@@ -554,7 +534,7 @@ class ModelRoleRegistry(BaseModel):
                 model_alias="openai_mini",
                 purpose="normal coding tasks and guided repairs",
                 max_input_tokens=64_000,
-                max_output_tokens=6_000,
+                max_output_tokens=4_000,
                 max_context_chars=256_000,
                 reasoning_effort="low",
                 verbosity="medium",
@@ -678,8 +658,7 @@ class PolicySettings(BaseModel):
     allow_frontier_direct_patch: bool = False
     allow_xhigh_reasoning: bool = False
     allow_emergency_pro_reviewer: bool = False
-    builder_execution_backend: BuilderExecutionBackend = "legacy_opencode"
-    provider_fallback_to_opencode: bool = True
+    builder_execution_backend: BuilderExecutionBackend = "role_provider"
     service_tiers: ServiceTierPolicySettings = Field(default_factory=ServiceTierPolicySettings)
 
 
@@ -699,9 +678,9 @@ class ValidationSettings(BaseModel):
 
 class ModelRoutingSettings(BaseModel):
     trivial: str = "deterministic"
-    simple: str = "opencode-local"
-    medium: str = "opencode-coding"
-    hard: str = "codex-reviewer-placeholder"
+    simple: str = "mechanical_worker"
+    medium: str = "general_builder"
+    hard: str = "frontier_reviewer"
     critical: str = "human-approval"
 
 
@@ -710,21 +689,6 @@ class ToolPermissions(BaseModel):
         default_factory=lambda: ["git", "pytest", "ruff", "mypy", "python", "python3"]
     )
     require_approval_for_delete: bool = True
-
-
-class OpenCodeSettings(BaseModel):
-    enabled: bool = False
-    dry_run: bool = True
-    executable: str = "opencode"
-    default_model: str = "opencode-local"
-    max_runtime_seconds: int = 300
-    output_mode: str = "unified_diff"
-    allowed_env_vars: list[str] = Field(default_factory=list)
-    extra_args: list[str] = Field(default_factory=list)
-    missing_install_note: str = (
-        "OpenCode is not installed or not on PATH. Install and authenticate OpenCode, "
-        "then set opencode.enabled=true and opencode.dry_run=false."
-    )
 
 
 class GitSettings(BaseModel):
@@ -736,7 +700,7 @@ class GitSettings(BaseModel):
 
 
 class AppConfig(BaseModel):
-    schema_version: int = 2
+    schema_version: int = 3
     repo_path: str = "."
     state_path: str = "logs/state.json"
     log_path: str = "logs/orchestrator.jsonl"
@@ -756,8 +720,73 @@ class AppConfig(BaseModel):
     pricing: PricingSettings = Field(default_factory=PricingSettings)
     validation: ValidationSettings = Field(default_factory=ValidationSettings)
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)
-    opencode: OpenCodeSettings = Field(default_factory=OpenCodeSettings)
     git: GitSettings = Field(default_factory=GitSettings)
+
+
+def _normalize_legacy_role_name(role_name: str) -> str:
+    return LEGACY_ROLE_RENAMES.get(role_name, role_name)
+
+
+def _rename_legacy_key(mapping: dict[str, Any], old_key: str, new_key: str) -> None:
+    if old_key in mapping and new_key not in mapping:
+        mapping[new_key] = mapping[old_key]
+    mapping.pop(old_key, None)
+
+
+def _normalize_legacy_config_keys(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+
+    model_aliases = normalized.get("model_aliases")
+    if isinstance(model_aliases, dict):
+        aliases = dict(model_aliases)
+        for old_key, new_key in LEGACY_MODEL_ALIAS_RENAMES.items():
+            _rename_legacy_key(aliases, old_key, new_key)
+        normalized["model_aliases"] = aliases
+
+    model_roles = normalized.get("model_roles")
+    if isinstance(model_roles, dict):
+        roles = model_roles.get("roles")
+        if isinstance(roles, dict):
+            normalized_roles: dict[str, Any] = {}
+            for role_name, role_settings in roles.items():
+                normalized_role_name = _normalize_legacy_role_name(role_name)
+                role_payload = (
+                    dict(role_settings) if isinstance(role_settings, dict) else role_settings
+                )
+                if isinstance(role_payload, dict):
+                    model_alias = role_payload.get("model_alias")
+                    if isinstance(model_alias, str):
+                        role_payload["model_alias"] = LEGACY_MODEL_ALIAS_RENAMES.get(
+                            model_alias,
+                            model_alias,
+                        )
+                normalized_roles[normalized_role_name] = role_payload
+            normalized["model_roles"] = {**model_roles, "roles": normalized_roles}
+
+    budget = normalized.get("budget")
+    if isinstance(budget, dict):
+        role_budgets = budget.get("role_budgets_usd")
+        if isinstance(role_budgets, dict):
+            normalized_budgets = dict(role_budgets)
+            for old_key, new_key in LEGACY_ROLE_RENAMES.items():
+                _rename_legacy_key(normalized_budgets, old_key, new_key)
+            normalized["budget"] = {**budget, "role_budgets_usd": normalized_budgets}
+
+    pricing = normalized.get("pricing")
+    if isinstance(pricing, dict):
+        roles = pricing.get("roles")
+        if isinstance(roles, dict):
+            normalized_pricing: dict[str, Any] = {}
+            for role_key, pricing_settings in roles.items():
+                normalized_role_key = role_key
+                for old_key, new_key in LEGACY_ROLE_RENAMES.items():
+                    if role_key == old_key or role_key.startswith(f"{old_key}:"):
+                        normalized_role_key = role_key.replace(old_key, new_key, 1)
+                        break
+                normalized_pricing[normalized_role_key] = pricing_settings
+            normalized["pricing"] = {**pricing, "roles": normalized_pricing}
+
+    return normalized
 
 
 def resolve_model_role(
@@ -766,7 +795,8 @@ def resolve_model_role(
     *,
     service_tier: ServiceTier | None = None,
 ) -> ResolvedModelRole:
-    role = config.model_roles.roles.get(role_name)
+    normalized_role_name = _normalize_legacy_role_name(role_name)
+    role = config.model_roles.roles.get(normalized_role_name)
     if role is None:
         raise ConfigResolutionError(f"Unknown model role: {role_name}")
 
@@ -779,7 +809,7 @@ def resolve_model_role(
 
     selected_service_tier = service_tier or role.default_service_tier
     return ResolvedModelRole(
-        role_name=role_name,
+        role_name=normalized_role_name,
         provider=role.provider,
         model=model,
         model_alias=role.model_alias,
@@ -793,7 +823,7 @@ def resolve_model_role(
         allow_tools=role.allow_tools,
         allow_direct_patch=(
             role.allow_direct_patch and config.policies.allow_frontier_direct_patch
-            if role_name.startswith("frontier_")
+            if normalized_role_name.startswith("frontier_")
             else role.allow_direct_patch
         ),
         budget_pool=role.budget_pool,
@@ -810,7 +840,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         raise ValueError("Config must be a YAML mapping")
-    return AppConfig.model_validate(data)
+    return AppConfig.model_validate(_normalize_legacy_config_keys(data))
 
 
 def dump_example_config() -> dict[str, Any]:

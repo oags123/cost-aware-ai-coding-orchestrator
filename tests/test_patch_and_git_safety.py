@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from coding_orchestrator.config import OpenCodeSettings, ValidationSettings
-from coding_orchestrator.schemas import CommandResult, TaskSpec
+from coding_orchestrator.config import ValidationSettings
+from coding_orchestrator.schemas import TaskSpec
 from coding_orchestrator.tools.git import DirtyWorktreeError, GitManager
-from coding_orchestrator.tools.opencode_runner import OpenCodeExecutionError, OpenCodeRunner
 from coding_orchestrator.tools.patch import (
     PatchApplyError,
     PatchContractError,
@@ -30,82 +28,6 @@ def commit_file(path: Path, relative: str, content: str) -> None:
     target.write_text(content, encoding="utf-8")
     subprocess.run(["git", "add", relative], cwd=path, check=True)
     subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
-
-
-def test_opencode_dry_run_returns_placeholder(tmp_path: Path) -> None:
-    runner = OpenCodeRunner(tmp_path, settings=OpenCodeSettings(enabled=False, dry_run=True))
-
-    result = runner.run_bounded_step(TaskSpec(id="T-1", title="x"), "context")
-
-    assert result.dry_run
-    assert "Placeholder" in result.text
-
-
-def test_opencode_missing_fails_cleanly(tmp_path: Path) -> None:
-    runner = OpenCodeRunner(
-        tmp_path,
-        settings=OpenCodeSettings(
-            enabled=True,
-            dry_run=False,
-            executable="definitely-missing-opencode",
-        ),
-    )
-
-    with pytest.raises(OpenCodeExecutionError, match="OpenCode is not installed"):
-        runner.run_bounded_step(TaskSpec(id="T-1", title="x"), "context")
-
-
-def test_opencode_real_mode_uses_bounded_command(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_which(executable: str) -> str:
-        return "/usr/bin/opencode"
-
-    def fake_run_limited_command(
-        command: list[str],
-        cwd: Path,
-        timeout_seconds: float,
-        allowlist: list[str],
-        stdin: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> CommandResult:
-        captured["command"] = command
-        captured["cwd"] = cwd
-        captured["timeout"] = timeout_seconds
-        captured["allowlist"] = allowlist
-        return CommandResult(
-            command=command,
-            returncode=0,
-            stdout=(
-                "diff --git a/app.py b/app.py\n"
-                "--- a/app.py\n"
-                "+++ b/app.py\n"
-                "@@ -1 +1 @@\n"
-                "-old\n"
-                "+new\n"
-            ),
-            stderr="",
-        )
-
-    monkeypatch.setattr("coding_orchestrator.tools.opencode_runner.shutil.which", fake_which)
-    monkeypatch.setattr(
-        "coding_orchestrator.tools.opencode_runner.run_limited_command",
-        fake_run_limited_command,
-    )
-    runner = OpenCodeRunner(
-        tmp_path,
-        settings=OpenCodeSettings(enabled=True, dry_run=False, default_model="openai/gpt-test"),
-    )
-
-    result = runner.run_bounded_step(TaskSpec(id="T-1", title="x"), "context")
-
-    assert not result.dry_run
-    assert captured["cwd"] == tmp_path
-    assert captured["allowlist"] == ["/usr/bin/opencode"]
-    assert captured["command"][0:4] == ["/usr/bin/opencode", "run", "--model", "openai/gpt-test"]
 
 
 def test_parse_rejects_free_form_output() -> None:

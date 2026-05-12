@@ -7,8 +7,6 @@ from uuid import uuid4
 
 from coding_orchestrator.config import (
     AppConfig,
-    BuilderExecutionBackend,
-    ConfigResolutionError,
     ResolvedModelRole,
     ServiceTier,
     resolve_model_role,
@@ -18,6 +16,7 @@ from coding_orchestrator.models.provider import (
     BuilderOutput,
     ModelProvider,
     ProviderConfigurationError,
+    ProviderError,
     ProviderRequest,
     ProviderResponse,
 )
@@ -41,7 +40,7 @@ from coding_orchestrator.orchestrator.escalation import EscalationManager
 from coding_orchestrator.orchestrator.limits import LimitExceeded, LimitGuard
 from coding_orchestrator.orchestrator.router import TaskClassifier
 from coding_orchestrator.orchestrator.state import StateStore
-from coding_orchestrator.orchestrator.tier_policy import CheapBuilderTierPolicy
+from coding_orchestrator.orchestrator.tier_policy import BuilderServiceTierPolicy
 from coding_orchestrator.orchestrator.timeouts import TimeoutExceeded, TimeoutGuard
 from coding_orchestrator.orchestrator.workflows import WORKFLOWS
 from coding_orchestrator.schemas import (
@@ -54,7 +53,6 @@ from coding_orchestrator.schemas import (
     load_task_file,
 )
 from coding_orchestrator.tools.git import GitCheckpoint, GitManager
-from coding_orchestrator.tools.opencode_runner import OpenCodeExecutionError, OpenCodeRunner
 from coding_orchestrator.tools.patch import SafePatchApplier, parse_builder_output
 from coding_orchestrator.validators.code_validator import SyntaxValidator
 from coding_orchestrator.validators.patch_validator import PatchValidator
@@ -90,7 +88,7 @@ class WorkflowEngine:
             )
         self.budget = BudgetGuard(budget_settings, config.pricing)
         self.limits = LimitGuard(config.limits)
-        self.tier_policy = CheapBuilderTierPolicy(config.inference.cheap_builder)
+        self.tier_policy = BuilderServiceTierPolicy(config.inference.builder_service_tier)
         self.convergence = ConvergenceEvaluator(config.convergence)
         self.review_packet_builder = ReviewPacketBuilder(config.diagnosis)
         self.diagnosis_reviewer = DiagnosisReviewer(config.diagnosis)
@@ -234,8 +232,8 @@ class WorkflowEngine:
             largest_stdout_bytes=metrics.largest_stdout_bytes,
             largest_stderr_bytes=metrics.largest_stderr_bytes,
             largest_validation_output_bytes=metrics.largest_validation_output_bytes,
-            flex_timeouts=self.tier_policy.state.flex_timeouts,
-            standard_fallbacks=self.tier_policy.state.standard_fallbacks,
+            service_tier_timeouts=dict(self.tier_policy.state.service_tier_timeouts),
+            service_tier_fallbacks=self.tier_policy.state.service_tier_fallbacks,
         )
 
     def convergence_report(self) -> dict[str, object]:
@@ -278,19 +276,23 @@ class WorkflowEngine:
             context += "\n\nPrevious validation feedback:\n" + self._compact_feedback(state)
         guidance = self._diagnosis_guidance(state)
         if guidance:
-            context += "\n\nDiagnosis-only reviewer guidance for cheap retry:\n" + guidance
+            context += "\n\nDiagnosis-only reviewer guidance for current-role retry:\n" + guidance
         try:
             context = self.limits.prepare_context(context)
         except LimitExceeded:
             tier = self.tier_policy.select_tier()
-            pricing = self.budget.pricing_for_role("cheap_builder", tier)
+            service_tier = self._service_tier_for_policy_tier(tier)
+            role_name = self._select_builder_role(task, state)
+            role = resolve_model_role(self.config, role_name, service_tier=service_tier)
+            pricing = self.budget.pricing_for_role(role_name, service_tier)
             estimate = self.budget.estimate_pre_call(
                 task=task,
                 attempt_id=state.retry_count + 1,
-                model_role="cheap_builder",
+                model_role=role_name,
                 context=context,
-                model_override=pricing.model,
-                inference_tier=tier,
+                model_override=role.model or pricing.model,
+                inference_tier=service_tier,
+                max_output_tokens_override=role.max_output_tokens,
             )
             state.estimated_input_tokens = estimate.estimated_input_tokens
             state.estimated_output_tokens = estimate.estimated_output_tokens
@@ -329,93 +331,7 @@ class WorkflowEngine:
         state: OrchestratorState,
         context: str,
     ) -> BuilderResult:
-        backend = self.config.policies.builder_execution_backend
-        if backend == "legacy_opencode":
-            return self._run_tiered_builder_legacy(task, state, context)
-        if backend == "role_provider":
-            if self.config.policies.provider_fallback_to_opencode:
-                return self._run_builder_with_provider_fallback(task, state, context, backend)
-            return self._run_role_builder(task, state, context)
-        if backend == "auto":
-            return self._run_builder_with_provider_fallback(task, state, context, backend)
-        raise ValueError(f"unknown builder backend: {backend}")
-
-    def _run_builder_with_provider_fallback(
-        self,
-        task: TaskSpec,
-        state: OrchestratorState,
-        context: str,
-        backend: BuilderExecutionBackend,
-    ) -> BuilderResult:
-        try:
-            return self._run_role_builder(task, state, context)
-        except (ConfigResolutionError, ProviderConfigurationError) as exc:
-            if not self.config.policies.provider_fallback_to_opencode:
-                raise
-            self.logger.log(
-                "provider_path_fallback_to_legacy",
-                request_id=state.request_id,
-                task_id=task.id,
-                backend=backend,
-                reason=str(exc),
-            )
-            return self._run_tiered_builder_legacy(task, state, context)
-
-    def _run_tiered_builder_legacy(
-        self,
-        task: TaskSpec,
-        state: OrchestratorState,
-        context: str,
-    ) -> BuilderResult:
-        while True:
-            tier = self.tier_policy.select_tier()
-            pricing = self.budget.pricing_for_role("cheap_builder", tier)
-            estimate = self.budget.estimate_pre_call(
-                task=task,
-                attempt_id=state.retry_count + 1,
-                model_role="cheap_builder",
-                context=context,
-                model_override=pricing.model,
-                inference_tier=tier,
-            )
-            if tier == "standard":
-                try:
-                    self.tier_policy.check_standard_fallback(estimate)
-                except BudgetExceeded:
-                    self.budget.record_estimate(estimate, status="blocked")
-                    raise
-            self._prepare_builder_call(task, state, estimate)
-            self.tier_policy.record_call(tier)
-            runner_settings = self.config.opencode.model_copy(
-                update={
-                    "default_model": pricing.model,
-                    "max_runtime_seconds": self.tier_policy.timeout_seconds(
-                        tier,
-                        self.config.opencode.max_runtime_seconds,
-                    ),
-                }
-            )
-            runner = OpenCodeRunner(self.repo_path, pricing.model, runner_settings)
-            try:
-                response = runner.run_bounded_step(task, context)
-            except OpenCodeExecutionError as exc:
-                if tier == "flex" and exc.timed_out:
-                    self.tier_policy.record_flex_timeout()
-                    state.tool_results["builder_timeout"] = {
-                        "tier": tier,
-                        "message": str(exc),
-                    }
-                    if self.tier_policy.should_fallback_to_standard():
-                        self.tier_policy.activate_fallback()
-                        continue
-                raise
-            self.tier_policy.record_success(tier)
-            state.tool_results["builder_tier"] = tier
-            state.tool_results["builder_model"] = pricing.model
-            state.tool_results["builder_provider"] = "opencode"
-            state.tool_results["builder_service_tier"] = tier
-            state.tool_results["builder_backend"] = "legacy_opencode"
-            return response
+        return self._run_role_builder(task, state, context)
 
     def _run_role_builder(
         self,
@@ -435,10 +351,11 @@ class WorkflowEngine:
                 context=context,
                 model_override=role.model,
                 inference_tier=service_tier,
+                max_output_tokens_override=role.max_output_tokens,
             )
             if tier == "standard":
                 try:
-                    self.tier_policy.check_standard_fallback(
+                    self.tier_policy.check_fallback_budget(
                         estimate.model_copy(update={"inference_tier": "standard"})
                     )
                 except BudgetExceeded:
@@ -460,7 +377,49 @@ class WorkflowEngine:
                 },
             )
             provider = self._provider_for_role(role)
-            response = provider.generate(request)
+            try:
+                response = provider.generate(request)
+            except ProviderConfigurationError as exc:
+                self.logger.log(
+                    "provider_configuration_dry_run",
+                    request_id=state.request_id,
+                    task_id=task.id,
+                    provider=role.provider,
+                    model=role.model,
+                    error=str(exc),
+                )
+                state.selected_model = role.model
+                state.tool_results["builder_role"] = role_name
+                state.tool_results["builder_tier"] = tier
+                state.tool_results["builder_service_tier"] = service_tier
+                state.tool_results["builder_model"] = role.model
+                state.tool_results["builder_provider"] = role.provider
+                state.tool_results["builder_backend"] = "role_provider"
+                state.tool_results["builder_warning"] = str(exc)
+                return BuilderResult(
+                    text=f"# Provider dry-run fallback for {role.provider}/{role.model}",
+                    confidence=0.0,
+                    estimated_output_tokens=0,
+                    command=[f"<provider:{role.provider}>"],
+                    returncode=0,
+                    stdout="",
+                    stderr=str(exc),
+                    timed_out=False,
+                    runtime_seconds=0.0,
+                    dry_run=True,
+                )
+            except ProviderError as exc:
+                is_flex_timeout = tier == "flex" and self._is_flex_transient_error(str(exc))
+                if is_flex_timeout:
+                    self.tier_policy.record_timeout("flex")
+                    state.tool_results["builder_timeout"] = {
+                        "service_tier": "flex",
+                        "message": str(exc),
+                    }
+                    if self.tier_policy.should_fallback():
+                        self.tier_policy.activate_fallback()
+                        continue
+                raise
             self.tier_policy.record_success(tier)
             state.selected_model = role.model
             state.tool_results["builder_role"] = role_name
@@ -472,6 +431,13 @@ class WorkflowEngine:
             state.tool_results["builder_request"] = request.model_dump()
             state.tool_results["builder_response_usage"] = response.usage.model_dump()
             return self._provider_response_to_builder_result(response)
+
+    def _is_flex_transient_error(self, error_text: str) -> bool:
+        lowered = error_text.lower()
+        return any(
+            marker in lowered
+            for marker in ("429", "timeout", "timed out", "resource unavailable", "rate limit")
+        )
 
     def _provider_for_role(self, role: ResolvedModelRole) -> ModelProvider:
         if role.provider in self.provider_overrides:
@@ -648,17 +614,19 @@ class WorkflowEngine:
                         "details": state.tool_results.get("diagnosis_budget_estimate", {}),
                     }
                     state.final_status = "blocked"
+                else:
+                    state.final_status = "escalated"
                 self._create_diagnosis_needed_package(task, state, validation_errors, review_packet)
                 self._finish(state, "diagnosis_needed")
                 return False
             diagnosis = state.tool_results.get("diagnosis", {})
             if (
                 isinstance(diagnosis, dict)
-                and diagnosis.get("should_retry_with_cheap_builder")
+                and diagnosis.get("should_retry_with_builder")
                 and state.retry_count + 1 < task.max_attempts
             ):
                 state.tool_results["reviewer_guidance"] = {
-                    "gemini_instruction": diagnosis.get("gemini_instruction", ""),
+                    "guided_fix_instruction": diagnosis.get("guided_fix_instruction", ""),
                     "summary": diagnosis.get("minimal_fix_strategy", ""),
                     "files_to_focus": diagnosis.get("files_to_focus", []),
                 }
@@ -709,7 +677,7 @@ class WorkflowEngine:
             state=state,
             diff=diff,
             logs=[
-                "diagnosis_needed: cheap builder is non-converging; "
+                "diagnosis_needed: builder role is non-converging; "
                 "future diagnosis-only reviewer should inspect this package.",
                 *logs,
             ],
@@ -745,6 +713,7 @@ class WorkflowEngine:
             model_role=self.config.diagnosis.model_role,
             context=prompt,
             model_override=self.config.diagnosis.model,
+            max_output_tokens_override=self.config.diagnosis.max_output_tokens,
         )
         state.tool_results["diagnosis_budget_estimate"] = estimate.model_dump()
         if estimate.estimated_input_tokens > self.config.diagnosis.max_input_tokens:
@@ -859,7 +828,7 @@ class WorkflowEngine:
         if not isinstance(guidance, dict):
             return ""
         parts = [
-            str(guidance.get("gemini_instruction", "")),
+            str(guidance.get("guided_fix_instruction", "")),
             str(guidance.get("summary", "")),
         ]
         files = guidance.get("files_to_focus", [])
