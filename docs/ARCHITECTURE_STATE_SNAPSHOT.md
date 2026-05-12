@@ -21,13 +21,15 @@ Date: 2026-05-11 UTC
 ## Cost/routing state
 
 - Role-driven model selection with config aliases.
+- `mechanical_worker` is the active routed nano/tiny deterministic coding role.
+- `classification_worker` is canonical for classification/summarization, but currently manual/reserved unless selected by config or policy.
 - Service-tier policy: flex primary, default fallback.
 - Pricing is config-driven with source metadata.
 - Budget and limits checked before provider calls.
 
 ## Test/validation snapshot
 
-- Latest suite in this session: `73 passed`.
+- Latest suite in this session: `74 passed`.
 - Ruff clean.
 - Mypy clean.
 

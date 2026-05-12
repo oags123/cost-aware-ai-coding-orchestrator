@@ -241,7 +241,7 @@ Primary flow in `coding_orchestrator/orchestrator/engine.py`:
 
 ### Model aliases
 
-- `openai_ultra_cheap_legacy` -> `gpt-5-nano`
+- `openai_classifier_nano` -> `gpt-5-nano`
 - `openai_nano` -> `gpt-5.4-nano`
 - `openai_mini_legacy` -> `gpt-5-mini`
 - `openai_mini` -> `gpt-5.4-mini`
@@ -251,11 +251,12 @@ Primary flow in `coding_orchestrator/orchestrator/engine.py`:
 - `openai_frontier_pro` -> `gpt-5.5-pro`
 - `openai_legacy_reasoning` -> `gpt-5`
 - `openai_non_reasoning` -> `gpt-4.1`
+- backward-compatible alias: `openai_ultra_cheap_legacy` -> `openai_classifier_nano`
 
 ### Role mappings / defaults
 
 - `mechanical_worker`: `gpt-5.4-nano`, low, flex->default
-- `ultra_cheap_classifier`: `gpt-5-nano`, none/low, flex/default, no patch
+- `classification_worker`: `gpt-5-nano`, none, flex/default, no patch, manual/reserved unless selected by config/policy
 - `simple_builder`: `gpt-5.4-mini`, low, flex->default
 - `general_builder`: `gpt-5.4-mini`, low/medium, flex/default
 - `coding_optimized_builder`: `gpt-5.3-codex`, medium, default
@@ -265,6 +266,7 @@ Primary flow in `coding_orchestrator/orchestrator/engine.py`:
 - `emergency_pro_reviewer`: `gpt-5.5-pro`, high, default/batch, manual approval, no direct patch
 - `legacy_reasoning_fallback`: `gpt-5`, low/medium fallback only
 - `non_reasoning_instruction_follower`: `gpt-4.1`, no reasoning fallback only
+- backward-compatible role alias: `ultra_cheap_classifier` -> `classification_worker`
 
 ### Escalation policy
 
