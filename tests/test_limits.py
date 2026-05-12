@@ -20,13 +20,14 @@ from coding_orchestrator.tools.patch import parse_builder_output
 def pricing(output_tokens: int = 1000) -> PricingSettings:
     return PricingSettings(
         roles={
-            "cheap_builder": ModelPricing(
+            "simple_builder:flex": ModelPricing(
                 provider="test",
-                model="cheap",
+                model="builder",
+                inference_tier="flex",
                 input_usd_per_1m_tokens=1.0,
                 output_usd_per_1m_tokens=2.0,
                 max_output_tokens=output_tokens,
-                budget_pool="cheap_builder",
+                budget_pool="builder",
             )
         }
     )
@@ -41,7 +42,7 @@ def app_config(tmp_path: Path, limits: LimitSettings, output_tokens: int = 1000)
             ledger_path=str(tmp_path / "budget.sqlite"),
             project_id="limit-tests",
             project_total_budget_usd=10.0,
-            cheap_builder_budget_usd=10.0,
+            role_budgets_usd={"simple_builder": 10.0},
             max_task_cost_usd=10.0,
             max_project_cost_usd=10.0,
         ),

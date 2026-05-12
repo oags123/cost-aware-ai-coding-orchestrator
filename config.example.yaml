@@ -1,13 +1,255 @@
+schema_version: 3
 repo_path: "."
 state_path: "logs/state.json"
 log_path: "logs/orchestrator.jsonl"
 
+providers:
+  openai:
+    enabled: true
+    runtime_enabled: false
+    api_key_env_var: "OPENAI_API_KEY"
+    base_url: null
+    request_timeout_seconds: 300
+    max_retries: 0
+
+model_aliases:
+  openai_classifier_nano: "gpt-5-nano"
+  openai_nano: "gpt-5.4-nano"
+  openai_mini_legacy: "gpt-5-mini"
+  openai_mini: "gpt-5.4-mini"
+  openai_codex: "gpt-5.3-codex"
+  openai_frontier_balanced: "gpt-5.4"
+  openai_frontier: "gpt-5.5"
+  openai_frontier_pro: "gpt-5.5-pro"
+  openai_legacy_reasoning: "gpt-5"
+  openai_non_reasoning: "gpt-4.1"
+
+model_roles:
+  roles:
+    mechanical_worker:
+      provider: openai
+      model_alias: openai_nano
+      purpose: tiny deterministic coding tasks
+      max_input_tokens: 16000
+      max_output_tokens: 1500
+      max_context_chars: 64000
+      reasoning_effort: low
+      verbosity: low
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: true
+      budget_pool: worker
+      default_service_tier: flex
+      fallback_service_tier: default
+      max_attempts: 2
+      manual_approval_required: false
+    classification_worker:
+      provider: openai
+      model_alias: openai_classifier_nano
+      purpose: classification and summarization only
+      max_input_tokens: 12000
+      max_output_tokens: 1000
+      max_context_chars: 48000
+      reasoning_effort: none
+      verbosity: low
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: false
+      budget_pool: worker
+      default_service_tier: flex
+      fallback_service_tier: default
+      max_attempts: 2
+      manual_approval_required: false
+    simple_builder:
+      provider: openai
+      model_alias: openai_mini
+      purpose: small local python patches
+      max_input_tokens: 32000
+      max_output_tokens: 3000
+      max_context_chars: 128000
+      reasoning_effort: low
+      verbosity: low
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: true
+      budget_pool: builder
+      default_service_tier: flex
+      fallback_service_tier: default
+      max_attempts: 2
+      manual_approval_required: false
+    general_builder:
+      provider: openai
+      model_alias: openai_mini
+      purpose: normal implementation and repair
+      max_input_tokens: 64000
+      max_output_tokens: 6000
+      max_context_chars: 256000
+      reasoning_effort: low
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: true
+      budget_pool: builder
+      default_service_tier: flex
+      fallback_service_tier: default
+      max_attempts: 2
+      manual_approval_required: false
+    coding_optimized_builder:
+      provider: openai
+      model_alias: openai_codex
+      purpose: coding-optimized patch generation
+      max_input_tokens: 64000
+      max_output_tokens: 8000
+      max_context_chars: 400000
+      reasoning_effort: medium
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: true
+      budget_pool: builder
+      default_service_tier: default
+      fallback_service_tier: null
+      max_attempts: 2
+      manual_approval_required: false
+    frontier_coding_reviewer:
+      provider: openai
+      model_alias: openai_codex
+      purpose: difficult coding diagnosis
+      max_input_tokens: 128000
+      max_output_tokens: 8000
+      max_context_chars: 400000
+      reasoning_effort: high
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: false
+      budget_pool: reviewer
+      default_service_tier: default
+      fallback_service_tier: null
+      max_attempts: 1
+      manual_approval_required: false
+    frontier_balanced_reviewer:
+      provider: openai
+      model_alias: openai_frontier_balanced
+      purpose: architecture-lite and large-context review
+      max_input_tokens: 256000
+      max_output_tokens: 6000
+      max_context_chars: 1000000
+      reasoning_effort: medium
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: false
+      budget_pool: reviewer
+      default_service_tier: default
+      fallback_service_tier: null
+      max_attempts: 1
+      manual_approval_required: false
+    frontier_reviewer:
+      provider: openai
+      model_alias: openai_frontier
+      purpose: architecture and difficult diagnosis
+      max_input_tokens: 256000
+      max_output_tokens: 8000
+      max_context_chars: 1000000
+      reasoning_effort: medium
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: false
+      budget_pool: reviewer
+      default_service_tier: default
+      fallback_service_tier: null
+      max_attempts: 1
+      manual_approval_required: false
+    emergency_pro_reviewer:
+      provider: openai
+      model_alias: openai_frontier_pro
+      purpose: manual-approval final adjudication
+      max_input_tokens: 128000
+      max_output_tokens: 8000
+      max_context_chars: 1000000
+      reasoning_effort: high
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: false
+      budget_pool: emergency
+      default_service_tier: default
+      fallback_service_tier: batch
+      max_attempts: 1
+      manual_approval_required: true
+    legacy_reasoning_fallback:
+      provider: openai
+      model_alias: openai_legacy_reasoning
+      purpose: compatibility fallback only
+      max_input_tokens: 64000
+      max_output_tokens: 4000
+      max_context_chars: 256000
+      reasoning_effort: medium
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: true
+      budget_pool: builder
+      default_service_tier: default
+      fallback_service_tier: null
+      max_attempts: 2
+      manual_approval_required: false
+    mini_legacy_fallback:
+      provider: openai
+      model_alias: openai_mini_legacy
+      purpose: compatibility fallback only
+      max_input_tokens: 64000
+      max_output_tokens: 4000
+      max_context_chars: 256000
+      reasoning_effort: low
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: false
+      budget_pool: builder
+      default_service_tier: default
+      fallback_service_tier: null
+      max_attempts: 2
+      manual_approval_required: false
+    non_reasoning_instruction_follower:
+      provider: openai
+      model_alias: openai_non_reasoning
+      purpose: deterministic instruction-following fallback
+      max_input_tokens: 64000
+      max_output_tokens: 4000
+      max_context_chars: 256000
+      reasoning_effort: none
+      verbosity: medium
+      structured_output: true
+      allow_tools: false
+      allow_direct_patch: false
+      budget_pool: builder
+      default_service_tier: default
+      fallback_service_tier: null
+      max_attempts: 2
+      manual_approval_required: false
+
+policies:
+  allow_frontier_direct_patch: false
+  allow_xhigh_reasoning: false
+  allow_emergency_pro_reviewer: false
+  builder_execution_backend: role_provider
+  service_tiers:
+    budget_optimization_enabled: true
+    default_builder_tier: flex
+    fallback_builder_tier: default
+    priority_enabled: false
+    max_flex_timeouts_before_fallback: 2
+    max_priority_cost_usd_per_run: 0.0
+
 model_routing:
-  trivial: "deterministic"
-  simple: "opencode-local"
-  medium: "opencode-coding"
-  hard: "codex-reviewer-placeholder"
-  critical: "human-approval"
+  trivial: deterministic
+  simple: mechanical_worker
+  medium: general_builder
+  hard: frontier_reviewer
+  critical: human-approval
 
 timeouts:
   max_task_runtime_seconds: 600
@@ -18,15 +260,30 @@ retries:
   max_retries: 1
 
 budget:
+  schema_version: 3
   max_task_cost_usd: 0.10
   max_project_cost_usd: 5.0
   stop_threshold_ratio: 0.9
-  ledger_path: "logs/budget.sqlite"
-  project_id: "default"
+  ledger_path: logs/budget.sqlite
+  project_id: default
   project_total_budget_usd: 5.0
-  cheap_builder_budget_usd: 3.0
-  expensive_reviewer_budget_usd: 1.0
-  emergency_budget_usd: 1.0
+  role_budgets_usd:
+    worker: 1.0
+    builder: 3.0
+    reviewer: 1.0
+    emergency: 1.0
+    mechanical_worker: 1.0
+    simple_builder: 3.0
+    general_builder: 3.0
+    coding_optimized_builder: 3.0
+    frontier_reviewer: 1.0
+    frontier_coding_reviewer: 1.0
+    frontier_balanced_reviewer: 1.0
+    classification_worker: 1.0
+    emergency_pro_reviewer: 0.5
+    legacy_reasoning_fallback: 0.5
+    non_reasoning_instruction_follower: 0.5
+    mini_legacy_fallback: 0.5
 
 limits:
   max_input_tokens_per_call: 32000
@@ -37,14 +294,14 @@ limits:
   max_stdout_bytes: 256000
   max_stderr_bytes: 64000
   max_validation_output_bytes: 64000
-  context_over_limit_policy: "reject"
-  output_over_limit_policy: "reject"
-  validation_output_over_limit_policy: "truncate"
+  context_over_limit_policy: reject
+  output_over_limit_policy: reject
+  validation_output_over_limit_policy: truncate
 
 inference:
-  cheap_builder:
-    default_tier: "flex"
-    fallback_tier: "standard"
+  builder_service_tier:
+    default_tier: flex
+    fallback_tier: standard
     flex:
       max_attempt_runtime_seconds: 600
       max_consecutive_timeouts: 2
@@ -64,16 +321,16 @@ convergence:
 diagnosis:
   enabled: false
   dry_run: true
-  provider: "placeholder"
-  model: "frontier-reviewer-placeholder"
-  model_role: "expensive_reviewer"
+  provider: openai
+  model: gpt-5.5
+  model_role: frontier_reviewer
   max_input_tokens: 8000
   max_output_tokens: 1500
   max_context_chars: 24000
   max_cost_per_call_usd: 0.25
   max_calls_per_task: 1
   max_calls_per_run: 2
-  role_budget_pool: "expensive_reviewer"
+  role_budget_pool: reviewer
   diagnosis_only: true
   max_packet_chars: 24000
   max_diff_chars: 10000
@@ -83,85 +340,209 @@ diagnosis:
 
 telegram:
   enabled: false
-  bot_token_env_var: "TELEGRAM_BOT_TOKEN"
-  chat_id_env_var: "TELEGRAM_CHAT_ID"
-  missing_env_policy: "warn"
+  bot_token_env_var: TELEGRAM_BOT_TOKEN
+  chat_id_env_var: TELEGRAM_CHAT_ID
+  missing_env_policy: warn
   notify_on_blocked: true
   notify_on_budget_exhausted: true
   notify_on_runtime_exhausted: true
   notify_on_no_runnable_tasks: true
   notify_on_system_error: true
 
-# Sample prices are placeholders for local planning only.
-# Audit and update these values against official Google pricing before real paid usage.
-pricing:
-  roles:
-    cheap_builder:flex:
-      provider: "google-gemini"
-      model: "gemini-3.1-flash-lite"
-      inference_tier: "flex"
-      input_usd_per_1m_tokens: 0.125
-      output_usd_per_1m_tokens: 0.75
-      max_output_tokens: 4000
-      budget_pool: "cheap_builder"
-    cheap_builder:standard:
-      provider: "google-gemini"
-      model: "gemini-3.1-flash-lite"
-      inference_tier: "standard"
-      input_usd_per_1m_tokens: 0.25
-      output_usd_per_1m_tokens: 1.50
-      max_output_tokens: 4000
-      budget_pool: "cheap_builder"
-    expensive_reviewer:
-      provider: "placeholder"
-      model: "frontier-reviewer-placeholder"
-      input_usd_per_1m_tokens: 5.00
-      output_usd_per_1m_tokens: 15.00
-      max_output_tokens: 1500
-      budget_pool: "expensive_reviewer"
-
 validation:
   max_files_changed: 5
   forbidden_paths:
-    - "/etc/"
-    - "~/.ssh"
-    - ".env"
-    - "secrets"
-    - "credentials"
-    - "tokens"
+    - /etc/
+    - ~/.ssh
+    - .env
+    - secrets
+    - credentials
+    - tokens
   default_commands:
-    - "ruff check ."
-    - "mypy ."
-    - "pytest"
+    - ruff check .
+    - mypy .
+    - pytest
 
 tool_permissions:
   allowlisted_shell_commands:
-    - "git"
-    - "pytest"
-    - "ruff"
-    - "mypy"
-    - "python"
-    - "python3"
+    - git
+    - pytest
+    - ruff
+    - mypy
+    - python
+    - python3
   require_approval_for_delete: true
-
-opencode:
-  enabled: false
-  dry_run: true
-  executable: "opencode"
-  default_model: "opencode-local"
-  max_runtime_seconds: 300
-  output_mode: "unified_diff"
-  allowed_env_vars: []
-  extra_args: []
-  missing_install_note: "OpenCode is not installed or not on PATH. Install and authenticate OpenCode, then set opencode.enabled=true and opencode.dry_run=false."
 
 git:
   require_clean_worktree: false
   preserve_untracked_dirs:
-    - "logs"
-    - ".cache"
-    - ".pytest_cache"
-    - ".mypy_cache"
-    - ".ruff_cache"
+    - logs
+    - .cache
+    - .pytest_cache
+    - .mypy_cache
+    - .ruff_cache
   preserve_untracked_files:
-    - ".gitignore"
+    - .gitignore
+
+pricing:
+  roles:
+    "mechanical_worker:flex":
+      provider: openai
+      model: gpt-5.4-nano
+      service_tier: flex
+      input_usd_per_1m_tokens: 0.10
+      cached_input_usd_per_1m_tokens: 0.01
+      output_usd_per_1m_tokens: 0.625
+      max_output_tokens: 1500
+      budget_pool: worker
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "mechanical_worker:default":
+      provider: openai
+      model: gpt-5.4-nano
+      service_tier: default
+      input_usd_per_1m_tokens: 0.20
+      cached_input_usd_per_1m_tokens: 0.02
+      output_usd_per_1m_tokens: 1.25
+      max_output_tokens: 1500
+      budget_pool: worker
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "classification_worker:flex":
+      provider: openai
+      model: gpt-5-nano
+      service_tier: flex
+      input_usd_per_1m_tokens: 0.025
+      cached_input_usd_per_1m_tokens: 0.0025
+      output_usd_per_1m_tokens: 0.20
+      max_output_tokens: 1000
+      budget_pool: worker
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "classification_worker:default":
+      provider: openai
+      model: gpt-5-nano
+      service_tier: default
+      input_usd_per_1m_tokens: 0.05
+      cached_input_usd_per_1m_tokens: 0.005
+      output_usd_per_1m_tokens: 0.40
+      max_output_tokens: 1000
+      budget_pool: worker
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "simple_builder:flex":
+      provider: openai
+      model: gpt-5.4-mini
+      service_tier: flex
+      input_usd_per_1m_tokens: 0.375
+      cached_input_usd_per_1m_tokens: 0.0375
+      output_usd_per_1m_tokens: 2.25
+      max_output_tokens: 3000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "simple_builder:default":
+      provider: openai
+      model: gpt-5.4-mini
+      service_tier: default
+      input_usd_per_1m_tokens: 0.75
+      cached_input_usd_per_1m_tokens: 0.075
+      output_usd_per_1m_tokens: 4.50
+      max_output_tokens: 3000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "general_builder:flex":
+      provider: openai
+      model: gpt-5.4-mini
+      service_tier: flex
+      input_usd_per_1m_tokens: 0.375
+      cached_input_usd_per_1m_tokens: 0.0375
+      output_usd_per_1m_tokens: 2.25
+      max_output_tokens: 6000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "general_builder:default":
+      provider: openai
+      model: gpt-5.4-mini
+      service_tier: default
+      input_usd_per_1m_tokens: 0.75
+      cached_input_usd_per_1m_tokens: 0.075
+      output_usd_per_1m_tokens: 4.50
+      max_output_tokens: 6000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "general_builder:priority":
+      provider: openai
+      model: gpt-5.4-mini
+      service_tier: priority
+      input_usd_per_1m_tokens: 1.50
+      cached_input_usd_per_1m_tokens: 0.15
+      output_usd_per_1m_tokens: 9.00
+      max_output_tokens: 6000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "coding_optimized_builder:default":
+      provider: openai
+      model: gpt-5.3-codex
+      service_tier: default
+      input_usd_per_1m_tokens: 1.75
+      cached_input_usd_per_1m_tokens: 0.175
+      output_usd_per_1m_tokens: 14.00
+      max_output_tokens: 8000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "coding_optimized_builder:priority":
+      provider: openai
+      model: gpt-5.3-codex
+      service_tier: priority
+      input_usd_per_1m_tokens: 3.50
+      cached_input_usd_per_1m_tokens: 0.35
+      output_usd_per_1m_tokens: 28.00
+      max_output_tokens: 8000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "frontier_reviewer:default":
+      provider: openai
+      model: gpt-5.5
+      service_tier: default
+      input_usd_per_1m_tokens: 5.00
+      cached_input_usd_per_1m_tokens: 0.50
+      output_usd_per_1m_tokens: 30.00
+      long_context_input_usd_per_1m_tokens: 10.00
+      long_context_cached_input_usd_per_1m_tokens: 1.00
+      long_context_output_usd_per_1m_tokens: 45.00
+      max_output_tokens: 4000
+      budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "frontier_reviewer:flex":
+      provider: openai
+      model: gpt-5.5
+      service_tier: flex
+      input_usd_per_1m_tokens: 2.50
+      cached_input_usd_per_1m_tokens: 0.25
+      output_usd_per_1m_tokens: 15.00
+      long_context_input_usd_per_1m_tokens: 5.00
+      long_context_cached_input_usd_per_1m_tokens: 0.50
+      long_context_output_usd_per_1m_tokens: 22.50
+      max_output_tokens: 4000
+      budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "frontier_reviewer:priority":
+      provider: openai
+      model: gpt-5.5
+      service_tier: priority
+      input_usd_per_1m_tokens: 12.50
+      cached_input_usd_per_1m_tokens: 1.25
+      output_usd_per_1m_tokens: 75.00
+      max_output_tokens: 4000
+      budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"

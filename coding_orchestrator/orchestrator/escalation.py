@@ -60,8 +60,11 @@ class EscalationManager:
     ) -> str:
         if state.final_status == "timeout":
             return "Review task scope or increase the configured timeout for this task."
-        if any("OpenCode" in error or "opencode" in error for error in validation_errors):
-            return "Install/configure OpenCode or rerun in dry_run mode."
+        if any(
+            "provider" in error.lower() or "openai" in error.lower()
+            for error in validation_errors
+        ):
+            return "Check provider configuration and API key environment variables, then retry."
         if validation_errors:
             return "Review validator output and prepare a bounded manual patch."
         return "Review task state and git diff before retrying."

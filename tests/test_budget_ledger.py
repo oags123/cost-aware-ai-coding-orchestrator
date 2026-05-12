@@ -13,36 +13,45 @@ from coding_orchestrator.schemas import TaskSpec
 def pricing(output_tokens: int = 1000) -> PricingSettings:
     return PricingSettings(
         roles={
-            "cheap_builder": ModelPricing(
+            "general_builder:flex": ModelPricing(
                 provider="test",
-                model="cheap",
+                model="builder-flex",
+                inference_tier="flex",
                 input_usd_per_1m_tokens=1.0,
                 output_usd_per_1m_tokens=2.0,
                 max_output_tokens=output_tokens,
-                budget_pool="cheap_builder",
+                budget_pool="builder",
             ),
-            "expensive_reviewer": ModelPricing(
+            "frontier_reviewer:default": ModelPricing(
                 provider="test",
-                model="expensive",
+                model="reviewer-default",
+                inference_tier="default",
                 input_usd_per_1m_tokens=10.0,
                 output_usd_per_1m_tokens=20.0,
                 max_output_tokens=output_tokens,
-                budget_pool="expensive_reviewer",
+                budget_pool="reviewer",
             ),
         }
     )
 
 
-def budget_settings(path: Path, **overrides: float | str) -> BudgetSettings:
+def budget_settings(
+    path: Path,
+    *,
+    project_id: str = "test-project",
+    project_total_budget_usd: float = 10.0,
+    role_budgets_usd: dict[str, float] | None = None,
+    max_task_cost_usd: float = 10.0,
+    max_project_cost_usd: float = 10.0,
+) -> BudgetSettings:
+    role_budgets = role_budgets_usd or {"general_builder": 10.0}
     return BudgetSettings(
         ledger_path=str(path),
-        project_id=str(overrides.get("project_id", "test-project")),
-        project_total_budget_usd=float(overrides.get("project_total_budget_usd", 10.0)),
-        cheap_builder_budget_usd=float(overrides.get("cheap_builder_budget_usd", 10.0)),
-        expensive_reviewer_budget_usd=float(overrides.get("expensive_reviewer_budget_usd", 10.0)),
-        emergency_budget_usd=float(overrides.get("emergency_budget_usd", 1.0)),
-        max_task_cost_usd=float(overrides.get("max_task_cost_usd", 10.0)),
-        max_project_cost_usd=float(overrides.get("max_project_cost_usd", 10.0)),
+        project_id=project_id,
+        project_total_budget_usd=project_total_budget_usd,
+        role_budgets_usd=role_budgets,
+        max_task_cost_usd=max_task_cost_usd,
+        max_project_cost_usd=max_project_cost_usd,
     )
 
 
@@ -53,8 +62,9 @@ def test_budget_ledger_persists_events(tmp_path: Path) -> None:
     estimate = guard.estimate_pre_call(
         task=task,
         attempt_id=1,
-        model_role="cheap_builder",
+        model_role="general_builder",
         context="abcd" * 100,
+        inference_tier="flex",
     )
     guard.record_estimate(estimate)
 
@@ -70,8 +80,9 @@ def test_estimate_calculation_uses_configured_prices(tmp_path: Path) -> None:
     estimate = guard.estimate_pre_call(
         task=TaskSpec(id="T-1", title="x"),
         attempt_id=1,
-        model_role="cheap_builder",
+        model_role="general_builder",
         context="abcd" * 100,
+        inference_tier="flex",
     )
 
     assert estimate.estimated_input_tokens == 100
@@ -90,8 +101,9 @@ def test_budget_exceeded_blocks_call_and_records_block(tmp_path: Path) -> None:
     estimate = guard.estimate_pre_call(
         task=task,
         attempt_id=1,
-        model_role="cheap_builder",
+        model_role="general_builder",
         context="abcd" * 1000,
+        inference_tier="flex",
     )
 
     with pytest.raises(BudgetExceeded):
@@ -104,18 +116,22 @@ def test_budget_exceeded_blocks_call_and_records_block(tmp_path: Path) -> None:
 
 def test_role_specific_budget_pool_is_enforced(tmp_path: Path) -> None:
     guard = BudgetGuard(
-        budget_settings(tmp_path / "budget.sqlite", cheap_builder_budget_usd=0.00001),
+        budget_settings(
+            tmp_path / "budget.sqlite",
+            role_budgets_usd={"general_builder": 0.00001},
+        ),
         pricing(output_tokens=1000),
     )
     task = TaskSpec(id="T-1", title="x", max_cost_usd=10)
     estimate = guard.estimate_pre_call(
         task=task,
         attempt_id=1,
-        model_role="cheap_builder",
+        model_role="general_builder",
         context="abcd" * 1000,
+        inference_tier="flex",
     )
 
-    with pytest.raises(BudgetExceeded, match="cheap_builder budget"):
+    with pytest.raises(BudgetExceeded, match="general_builder budget"):
         guard.check_pre_call(task, estimate)
 
 
@@ -128,7 +144,7 @@ def test_project_budget_persists_across_engine_instances(tmp_path: Path) -> None
         budget=budget_settings(
             ledger_path,
             project_total_budget_usd=0.0005,
-            cheap_builder_budget_usd=10.0,
+            role_budgets_usd={"general_builder": 10.0},
         ),
         pricing=pricing(output_tokens=100),
     )
@@ -137,8 +153,9 @@ def test_project_budget_persists_across_engine_instances(tmp_path: Path) -> None
     estimate = first.budget.estimate_pre_call(
         task=task,
         attempt_id=1,
-        model_role="cheap_builder",
+        model_role="general_builder",
         context="abcd" * 100,
+        inference_tier="flex",
     )
     first.budget.record_estimate(estimate)
 
@@ -146,10 +163,10 @@ def test_project_budget_persists_across_engine_instances(tmp_path: Path) -> None
     next_estimate = second.budget.estimate_pre_call(
         task=task,
         attempt_id=2,
-        model_role="cheap_builder",
+        model_role="general_builder",
         context="abcd" * 100,
+        inference_tier="flex",
     )
 
     with pytest.raises(BudgetExceeded, match="project_total budget"):
         second.budget.check_pre_call(task, next_estimate)
-

@@ -44,7 +44,7 @@ def test_convergence_detected() -> None:
     decision = evaluator.evaluate(current, previous)
 
     assert decision.status == "converging"
-    assert decision.action == "continue_cheap_retry"
+    assert decision.action == "continue_current_role_retry"
     assert decision.improvement_score > 0
 
 
@@ -115,7 +115,7 @@ def test_diagnosis_needed_package_generated(tmp_path: Path) -> None:
             ledger_path=str(tmp_path / "budget.sqlite"),
             project_id="convergence-tests",
             project_total_budget_usd=10,
-            cheap_builder_budget_usd=10,
+            role_budgets_usd={"general_builder": 10},
             max_task_cost_usd=10,
             max_project_cost_usd=10,
         ),

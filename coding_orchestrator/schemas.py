@@ -37,7 +37,7 @@ ConvergenceStatus = Literal[
     "non_converging",
 ]
 ConvergenceDecisionAction = Literal[
-    "continue_cheap_retry",
+    "continue_current_role_retry",
     "request_diagnosis",
     "pause_block_task",
     "mark_non_converging",
@@ -63,7 +63,7 @@ class AttemptMetrics(BaseModel):
 
 class ConvergenceDecision(BaseModel):
     status: ConvergenceStatus = "unknown"
-    action: ConvergenceDecisionAction = "continue_cheap_retry"
+    action: ConvergenceDecisionAction = "continue_current_role_retry"
     improvement_score: float = 0.0
     reason: str = ""
     stagnant_attempts: int = 0
@@ -178,11 +178,15 @@ class DiagnosisResult(BaseModel):
     minimal_fix_strategy: str = ""
     files_to_focus: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
-    gemini_instruction: str = ""
+    diagnosis_instruction: str = ""
+    guided_fix_instruction: str = ""
+    escalation_instruction: str = ""
+    reviewer_instruction: str = ""
+    recommended_role: str = ""
     confidence: float = 0.0
-    should_retry_with_cheap_builder: bool = False
+    should_retry_with_builder: bool = False
     risk_assessment: str = ""
-    recommended_next_instruction: str = ""
+    recommended_next_action: str = ""
     direct_patch_proposed: bool = False
 
 

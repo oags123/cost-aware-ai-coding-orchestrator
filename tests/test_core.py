@@ -29,8 +29,8 @@ def test_task_and_complexity_classification() -> None:
 def test_model_routing_uses_minimum_required_tier() -> None:
     router = ModelRouter()
 
-    assert router.select_model("simple", "low") == "opencode-local"
-    assert router.select_model("hard", "high") == "codex-reviewer-placeholder"
+    assert router.select_model("simple", "low") == "mechanical_worker"
+    assert router.select_model("hard", "high") == "frontier_reviewer"
     assert router.select_model("critical", "high") == "human-approval"
 
 

@@ -52,7 +52,7 @@ def parse_builder_output(text: str) -> ParsedPatch | None:
             touched_files=extract_touched_files(patch),
             output_mode="unified_diff",
         )
-    raise PatchContractError("OpenCode output must be unified diff or structured JSON patch")
+    raise PatchContractError("Builder output must be unified diff or structured JSON patch")
 
 
 def extract_touched_files(patch: str) -> list[str]:

@@ -64,8 +64,8 @@ def test_dry_run_diagnosis_interface_returns_structured_result() -> None:
 
     result = DiagnosisReviewer(DiagnosisSettings(enabled=True, dry_run=True)).diagnose(packet)
 
-    assert result.recommended_next_instruction
-    assert result.gemini_instruction
+    assert result.recommended_next_action
+    assert result.guided_fix_instruction
     assert not result.direct_patch_proposed
 
 
@@ -78,8 +78,7 @@ def config(tmp_path: Path, diagnosis: DiagnosisSettings) -> AppConfig:
             ledger_path=str(tmp_path / "budget.sqlite"),
             project_id="diagnosis-tests",
             project_total_budget_usd=10,
-            cheap_builder_budget_usd=10,
-            expensive_reviewer_budget_usd=10,
+            role_budgets_usd={"frontier_reviewer": 10, "general_builder": 10},
             max_task_cost_usd=10,
             max_project_cost_usd=10,
         ),
@@ -113,7 +112,9 @@ def test_diagnosis_enabled_dry_run_records_result(tmp_path: Path) -> None:
 
 def test_diagnosis_budget_block_blocks_reviewer_call(tmp_path: Path) -> None:
     app_config = config(tmp_path, DiagnosisSettings(enabled=True, dry_run=True))
-    app_config.budget = app_config.budget.model_copy(update={"expensive_reviewer_budget_usd": 0.0})
+    app_config.budget = app_config.budget.model_copy(
+        update={"role_budgets_usd": {"frontier_reviewer": 0.0}}
+    )
     engine = WorkflowEngine(app_config)
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
     engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
@@ -121,14 +122,14 @@ def test_diagnosis_budget_block_blocks_reviewer_call(tmp_path: Path) -> None:
     state = engine.run_task(TaskSpec(id="T-BUDGET", title="Fix bug", max_cost_usd=10))
 
     assert state.final_status == "blocked"
-    assert "expensive_reviewer budget" in state.validation_results["budget"]["message"]
+    assert "frontier_reviewer budget" in state.validation_results["budget"]["message"]
 
 
 def test_reviewer_direct_patch_rejected() -> None:
     result = DiagnosisResult(
         root_cause="x",
         minimal_fix_strategy="diff --git a/app.py b/app.py",
-        gemini_instruction="focus app.py",
+        guided_fix_instruction="focus app.py",
         direct_patch_proposed=True,
     )
 
@@ -144,7 +145,7 @@ def test_reviewer_shell_command_rejected() -> None:
     result = DiagnosisResult(
         root_cause="x",
         minimal_fix_strategy="narrow fix",
-        gemini_instruction="run pytest tests/test_app.py",
+        guided_fix_instruction="run pytest tests/test_app.py",
     )
 
     try:
@@ -161,17 +162,17 @@ def test_valid_diagnosis_accepted() -> None:
         minimal_fix_strategy="adjust the allowed file only",
         files_to_focus=["app.py"],
         risks=["keep scope small"],
-        gemini_instruction="Focus on app.py and address the current validator failure.",
+        guided_fix_instruction="Focus on app.py and address the current validator failure.",
         confidence=0.7,
-        should_retry_with_cheap_builder=True,
+        should_retry_with_builder=True,
     )
 
     accepted = validate_diagnosis_result(result, DiagnosisSettings(enabled=True))
 
-    assert accepted.should_retry_with_cheap_builder
+    assert accepted.should_retry_with_builder
 
 
-def test_diagnosis_feeds_guided_cheap_retry(tmp_path: Path) -> None:
+def test_diagnosis_feeds_guided_builder_retry(tmp_path: Path) -> None:
     engine = WorkflowEngine(
         config(
             tmp_path,
