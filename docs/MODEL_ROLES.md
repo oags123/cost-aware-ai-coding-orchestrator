@@ -1,56 +1,42 @@
-# Model Roles Specification
+# Model Roles
 
-Status: Phase 2.5 catalog and routing defaults updated for OpenAI-first capability roles.
+Capability roles are config-driven. Reasoning is request-level (`reasoning_effort`), not a separate model id.
 
-## Model Catalog
+| Role | Default Model | Default Reasoning | Default Tier | Direct Patch |
+| --- | --- | --- | --- | --- |
+| `mechanical_worker` | `gpt-5.4-nano` | `low` | `flex` | bounded tiny patches only |
+| `classification_worker` | `gpt-5-nano` | `none` | `flex` | no |
+| `simple_builder` | `gpt-5.4-mini` | `low` | `flex` | yes |
+| `general_builder` | `gpt-5.4-mini` | `low` | `flex` | yes |
+| `coding_optimized_builder` | `gpt-5.3-codex` | `medium` | `default` | yes |
+| `frontier_coding_reviewer` | `gpt-5.3-codex` | `high` | `default` | no |
+| `frontier_balanced_reviewer` | `gpt-5.4` | `medium` | `default` | no |
+| `frontier_reviewer` | `gpt-5.5` | `medium` | `default` | no |
+| `emergency_pro_reviewer` | `gpt-5.5-pro` | `high` | `default` | no, manual approval required |
+| `legacy_reasoning_fallback` | `gpt-5` | `medium` | `default` | compatibility fallback |
+| `non_reasoning_instruction_follower` | `gpt-4.1` | `none` | `default` | fallback only |
 
-| Alias | Model ID | Purpose |
-| --- | --- | --- |
-| `openai_ultra_cheap_legacy` | `gpt-5-nano` | cheapest classification/summarization only |
-| `openai_nano` | `gpt-5.4-nano` | default mechanical worker |
-| `openai_mini_legacy` | `gpt-5-mini` | legacy mini fallback |
-| `openai_mini` | `gpt-5.4-mini` | default simple/general builder |
-| `openai_codex` | `gpt-5.3-codex` | coding-optimized builder/reviewer |
-| `openai_frontier_balanced` | `gpt-5.4` | balanced frontier reviewer |
-| `openai_frontier` | `gpt-5.5` | main frontier reviewer |
-| `openai_frontier_pro` | `gpt-5.5-pro` | manual approval emergency reviewer |
-| `openai_legacy_reasoning` | `gpt-5` | compatibility fallback only |
-| `openai_non_reasoning` | `gpt-4.1` | deterministic non-reasoning fallback |
+`mechanical_worker` remains the active routed nano role for tiny deterministic coding and bounded patch work. `classification_worker` is a canonical classification/summarization role, but it is currently manual/reserved unless selected explicitly by config or policy.
 
-Thinking is request-level configuration (`reasoning_effort`), not a separate model ID.
-`gpt-5.3-codex` with `medium` and `high` reasoning uses the same model ID.
+Legacy names are accepted for backward compatibility only:
 
-## Role Mapping
+- `ultra_cheap_classifier` -> `classification_worker`
+- `openai_ultra_cheap_legacy` -> `openai_classifier_nano`
 
-| Role | Default alias/model | Reasoning | Tier policy |
-| --- | --- | --- | --- |
-| `mechanical_worker` | `openai_nano` / `gpt-5.4-nano` | `low` | `flex` then `default` |
-| `ultra_cheap_classifier` | `openai_ultra_cheap_legacy` / `gpt-5-nano` | `none` | `flex` then `default` |
-| `simple_builder` | `openai_mini` / `gpt-5.4-mini` | `low` | `flex` then `default` |
-| `general_builder` | `openai_mini` / `gpt-5.4-mini` | `low` (raise to `medium` per request) | `flex` then `default` |
-| `coding_optimized_builder` | `openai_codex` / `gpt-5.3-codex` | `medium` | `default` |
-| `frontier_coding_reviewer` | `openai_codex` / `gpt-5.3-codex` | `high` | `default` |
-| `frontier_balanced_reviewer` | `openai_frontier_balanced` / `gpt-5.4` | `medium`/`high` | `default` |
-| `frontier_reviewer` | `openai_frontier` / `gpt-5.5` | `medium` by default | `default` |
-| `emergency_pro_reviewer` | `openai_frontier_pro` / `gpt-5.5-pro` | `high` | manual approval only |
-| `legacy_reasoning_fallback` | `openai_legacy_reasoning` / `gpt-5` | `low`/`medium` | `default` |
-| `non_reasoning_instruction_follower` | `openai_non_reasoning` / `gpt-4.1` | `none` | `default` |
+## Routing matrix
 
-## Routing Matrix
+| Task profile | Primary role |
+| --- | --- |
+| tiny deterministic coding or bounded patch | `mechanical_worker` |
+| manual classification/summarization workload | `classification_worker` |
+| tiny bounded validated patch | `mechanical_worker` then escalate quickly |
+| small local Python patch | `simple_builder` |
+| normal implementation | `general_builder` |
+| coding-heavy integration | `coding_optimized_builder` |
+| stubborn failures requiring diagnosis | `frontier_coding_reviewer` diagnosis |
+| architecture/planning/high ambiguity | `frontier_reviewer` diagnosis |
+| repeated hard blocker | `emergency_pro_reviewer` (manual approval only) |
 
-- tiny deterministic extraction: `mechanical_worker` (`gpt-5.4-nano`, `none/low`, `flex`)
-- tiny validated patch: `mechanical_worker`, escalate quickly on validation failure
-- small local patch: `simple_builder` (`gpt-5.4-mini`, `low`, `flex`)
-- normal implementation: `general_builder` (`gpt-5.4-mini`, `low/medium`, `flex/default`)
-- coding-heavy integration: `coding_optimized_builder` (`gpt-5.3-codex`, `medium`, `default`)
-- stubborn test failures: `frontier_coding_reviewer` diagnosis, then builder applies fix
-- architecture/planning: `frontier_reviewer` (`gpt-5.5`, `medium/high`, `default`)
-- repeated hard blocker: `emergency_pro_reviewer` (`gpt-5.5-pro`) with manual approval
-- deterministic no-reasoning fallback: `non_reasoning_instruction_follower` (`gpt-4.1`)
+## Escalation policy
 
-## Guardrails
-
-- `allow_frontier_direct_patch` defaults to `false`.
-- `allow_xhigh_reasoning` defaults to `false`.
-- `allow_emergency_pro_reviewer` defaults to `false`.
-- Model output still cannot execute shell commands directly.
+`mechanical_worker/simple_builder -> general_builder -> frontier diagnosis -> guided general_builder retry -> human escalation`

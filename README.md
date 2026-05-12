@@ -1,152 +1,62 @@
 # Cost-Aware AI Coding Orchestrator
 
-Phase 1 MVP of a controlled local workflow engine for small coding tasks. This is not a free-roaming agent: Python owns the workflow, deterministic tools execute commands, validators decide whether results are acceptable, and model execution is bounded by config, timeouts, budgets, patch contracts, and file permissions.
+Local Python orchestrator for bounded coding workflows with strict safety gates.
 
-## Workflow
+## What It Does
 
-`request -> classify -> route -> build context -> execute bounded step -> validate -> retry/repair/escalate -> log result`
+- Classifies tasks and routes them to capability roles.
+- Calls model providers through a typed provider interface.
+- Accepts only unified diff or structured JSON patch output.
+- Applies patches only after boundary and `git apply --check` validation.
+- Runs deterministic validators (`ruff`, `mypy`, `pytest`) after patch apply.
+- Rolls back to git checkpoint on failure.
+- Enforces bounded retries, runtime, context, output, and cost.
+- Persists state/logs and budget ledger locally.
 
-Implemented pieces:
+## Runtime Architecture
 
-- Pydantic task and orchestrator state
-- YAML config and YAML/frontmatter task files
-- Dependency ordering for many small task files
-- Model routing for deterministic, local builder, reviewer-placeholder, and human approval tiers
-- Dry-run builder mode plus config-gated real OpenCode execution through `opencode run`
-- Strict OpenCode output contract: unified diff or structured JSON patch
-- Safe patch application with `git apply --check`
-- Retry, timeout, budget, permission, patch, syntax, command, and test validation
-- Git diff/status/commit/rollback wrappers
-- JSON state and JSONL logs
-- Escalation package generation
-- CLI entrypoint
-- Dockerfile and docker-compose support
+- Backend: `role_provider` (primary and only runtime backend).
+- Provider support today: OpenAI (opt-in), fake provider for tests/dry runs.
+- No model-generated shell execution.
+- Shell commands run only via deterministic subprocess wrappers with allowlists/timeouts.
 
-## Install
+## Quick Start
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
-```
+1. Create a virtual environment and install dependencies.
+2. Copy `config.example.yaml` to `config.yaml`.
+3. For fake-provider local runs, keep OpenAI runtime disabled.
+4. For real OpenAI calls, set `OPENAI_API_KEY` and enable `providers.openai.runtime_enabled`.
+5. Run:
+   - `python -m coding_orchestrator.app run --task tasks/example_task.md`
+   - `python -m coding_orchestrator.app report`
 
-## CLI
+## Role Defaults
 
-```bash
-.venv/bin/python -m coding_orchestrator.app run --task tasks/example_task.md
-.venv/bin/python -m coding_orchestrator.app run-all --tasks-dir tasks/
-.venv/bin/python -m coding_orchestrator.app validate
-.venv/bin/python -m coding_orchestrator.app report
-```
+- `mechanical_worker` -> `gpt-5.4-nano` (`flex`, reasoning `none/low`)
+- `classification_worker` -> `gpt-5-nano` (`flex/default`, reasoning `none`, no patch)
+- `simple_builder` -> `gpt-5.4-mini` (`flex`, reasoning `low`)
+- `general_builder` -> `gpt-5.4-mini` (`flex/default`, reasoning `low/medium`)
+- `coding_optimized_builder` -> `gpt-5.3-codex` (`default`, reasoning `medium`)
+- `frontier_reviewer` -> `gpt-5.5` (`default`, diagnosis-first)
+- `emergency_pro_reviewer` -> `gpt-5.5-pro` (manual approval only)
 
-The default config path is `config.yaml`. If it is missing, built-in defaults are used. Start from `config.example.yaml` for local settings.
+`mechanical_worker` remains the active routed nano role for tiny deterministic coding and bounded patches. `classification_worker` is a canonical role for classification and summarization workloads, but is currently manual/reserved unless selected explicitly by config or policy.
 
-## OpenCode Modes
+Legacy names remain accepted for backward compatibility only:
 
-The default mode is safe dry-run mode:
+- `ultra_cheap_classifier` -> `classification_worker`
+- `openai_ultra_cheap_legacy` -> `openai_classifier_nano`
 
-```yaml
-opencode:
-  enabled: false
-  dry_run: true
-```
+## Validation Commands
 
-Dry-run mode exercises the orchestrator, validators, logging, retry, and escalation flow without calling OpenCode or applying model output.
+- `.venv/bin/ruff check .`
+- `.venv/bin/mypy .`
+- `.venv/bin/pytest`
 
-Real OpenCode mode is config-gated:
+## Docs
 
-```yaml
-opencode:
-  enabled: true
-  dry_run: false
-  executable: "opencode"
-  default_model: "provider/model"
-  output_mode: "unified_diff"
-  allowed_env_vars:
-    - "ANTHROPIC_API_KEY"
-    - "OPENAI_API_KEY"
-```
-
-Install and authenticate OpenCode separately before enabling real mode. See
-[OpenCode Setup](docs/OPENCODE_SETUP.md). The orchestrator invokes only
-`opencode run ...` with a bounded timeout and requires OpenCode output to be
-either a unified diff or structured JSON with `patch`, `touched_files`,
-`summary`, and `confidence`.
-
-Use `opencode auth login` and `opencode models --refresh` / `opencode models` to configure providers and find the exact `provider/model` string before enabling real mode.
-
-Patch safety rules:
-
-- `git apply --check` runs before applying.
-- Touched files must be inside task `allowed_files` when that list is set.
-- Forbidden paths such as `.env`, secrets, credentials, tokens, `/etc/`, and `~/.ssh` are rejected.
-- File deletes are rejected unless the task sets `allow_deletes: true`.
-- Max changed files is enforced by config.
-- Validators run after patch application.
-
-## Docker
-
-```bash
-docker compose up
-docker compose run orchestrator python -m coding_orchestrator.app run-all --tasks-dir tasks/
-```
-
-The container runs as a non-root user and mounts the project plus persistent `logs/`. Docker validation requires the current user to have access to the Docker socket. If `docker compose build` reports permission denied for `/var/run/docker.sock`, fix local Docker permissions before testing the container.
-
-Docker is not required for the first real OpenCode trial. The current Dockerfile
-does not install OpenCode or provider credentials; prefer local venv execution
-for the first real task.
-
-## Validation
-
-```bash
-.venv/bin/ruff check .
-.venv/bin/mypy .
-.venv/bin/pytest
-```
-
-## Task Format
-
-```yaml
----
-id: T-042
-title: Implement user service
-complexity: medium
-risk: low
-depends_on:
-  - T-010
-allowed_files:
-  - src/users/service.py
-  - tests/test_user_service.py
-max_attempts: 2
-max_runtime_seconds: 480
-max_cost_usd: 0.06
-escalation_allowed: true
-validation_commands:
-  - pytest tests/test_user_service.py
----
-Task details go here.
-```
-
-## Phase 1 Boundaries
-
-No LangChain, LangGraph, CrewAI, AutoGen, web UI, Kubernetes, paid APIs beyond the user's separate OpenCode setup, embeddings, semantic memory, vector database, or cloud deployment are included. LLMs do not run shell commands or decide policy.
-
-Codex repository instructions live in `AGENTS.md`; the official Codex CLI docs describe generating this file with `/init`: <https://developers.openai.com/codex/cli/slash-commands#generate-agentsmd-with-init>.
-
-## More Documentation
-
-- [Quickstart](docs/QUICKSTART.md)
-- [User Guide](docs/USER_GUIDE.md)
-- [Real-World Trial Runbook](docs/REAL_WORLD_TRIAL.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Configuration](docs/CONFIGURATION.md)
-- [Tasks](docs/TASKS.md)
+- [Model Roles](docs/MODEL_ROLES.md)
+- [Cost Control](docs/COST_CONTROL.md)
 - [Safety](docs/SAFETY.md)
-- [OpenCode Setup](docs/OPENCODE_SETUP.md)
-- [Development](docs/DEVELOPMENT.md)
-- [MVP Status](docs/MVP_STATUS.md)
-- [Roadmap](docs/ROADMAP.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Phase 1.5 Architecture Plan](docs/PHASE_1_5_ARCHITECTURE.md)
-- [Cost Control Plan](docs/COST_CONTROL.md)
-- [Escalation Policy Plan](docs/ESCALATION_POLICY.md)
