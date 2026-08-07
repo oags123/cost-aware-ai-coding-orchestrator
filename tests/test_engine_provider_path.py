@@ -72,7 +72,7 @@ def test_engine_selects_mechanical_worker_for_tiny_validated_task(
         validation_commands=["python -c 'pass'"],
     )
     monkeypatch.setattr(engine, "_validate", lambda task: [])
-    monkeypatch.setattr(engine, "_commit", lambda task, state: None)
+    monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(task)
 
@@ -114,7 +114,7 @@ def test_provider_structured_patch_flows_through_patch_safety(
         validation_commands=["python -c 'pass'"],
     )
     monkeypatch.setattr(engine, "_validate", lambda task: [])
-    monkeypatch.setattr(engine, "_commit", lambda task, state: None)
+    monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(task)
 
@@ -201,7 +201,7 @@ def test_budget_ledger_records_provider_role_and_service_tier(
         validation_commands=["python -c 'pass'"],
     )
     monkeypatch.setattr(engine, "_validate", lambda task: [])
-    monkeypatch.setattr(engine, "_commit", lambda task, state: None)
+    monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(task)
 
@@ -227,12 +227,28 @@ def test_role_provider_backend_is_active_by_default(
 ) -> None:
     init_repo(tmp_path)
     commit_file(tmp_path, "app.py", "old\n")
-    provider = FakeModelProvider([""])
+    provider = FakeModelProvider(
+        [
+            BuilderOutput(
+                patch=(
+                    "diff --git a/app.py b/app.py\n"
+                    "--- a/app.py\n"
+                    "+++ b/app.py\n"
+                    "@@ -1 +1 @@\n"
+                    "-old\n"
+                    "+new\n"
+                ),
+                touched_files=["app.py"],
+                summary="default backend check",
+                confidence=0.6,
+            )
+        ]
+    )
     engine = build_provider_engine(tmp_path, provider)
     task = TaskSpec(id="T-5", title="Fix bug", allowed_files=["app.py"])
 
     monkeypatch.setattr(engine, "_validate", lambda task: [])
-    monkeypatch.setattr(engine, "_commit", lambda task, state: None)
+    monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(task)
 

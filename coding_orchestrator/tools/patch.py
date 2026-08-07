@@ -74,6 +74,12 @@ def patch_deletes_files(patch: str) -> bool:
     return any(marker in patch for marker in markers)
 
 
+def patch_creates_symlink(patch: str) -> bool:
+    # Git marks symlink blobs with file mode 120000 in diff headers
+    # (e.g. "new file mode 120000", "new mode 120000").
+    return "mode 120000" in patch
+
+
 class SafePatchApplier:
     def __init__(
         self,
@@ -96,8 +102,14 @@ class SafePatchApplier:
             raise PatchContractError(f"too many files touched: {len(touched)}")
         if patch_deletes_files(parsed.patch) and not task.allow_deletes:
             raise PatchContractError("file deletes are not allowed for this task")
+        if patch_creates_symlink(parsed.patch):
+            raise PatchContractError("patches that create or modify symlinks are not allowed")
+        if len(touched) != len(set(touched)):
+            raise PatchContractError("patch declares duplicate touched file paths")
         allowed = set(task.allowed_files)
         for raw_path in touched:
+            if Path(raw_path).is_absolute():
+                raise PatchContractError(f"patch path must be relative: {raw_path}")
             if is_forbidden_path(raw_path, self.settings.forbidden_paths):
                 raise PatchContractError(f"forbidden path in patch: {raw_path}")
             candidate = (self.repo_path / raw_path).resolve()

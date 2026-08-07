@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -19,6 +20,7 @@ from coding_orchestrator.models.provider import (
     ProviderError,
     ProviderRequest,
     ProviderResponse,
+    ProviderTransientError,
 )
 from coding_orchestrator.models.router import ModelRouter
 from coding_orchestrator.observability.logger import JsonlLogger
@@ -42,7 +44,7 @@ from coding_orchestrator.orchestrator.router import TaskClassifier
 from coding_orchestrator.orchestrator.state import StateStore
 from coding_orchestrator.orchestrator.tier_policy import BuilderServiceTierPolicy
 from coding_orchestrator.orchestrator.timeouts import TimeoutExceeded, TimeoutGuard
-from coding_orchestrator.orchestrator.workflows import WORKFLOWS
+from coding_orchestrator.orchestrator.workflows import NON_MODIFYING_WORKFLOWS, WORKFLOWS
 from coding_orchestrator.schemas import (
     BuilderResult,
     ConvergenceDecision,
@@ -53,6 +55,7 @@ from coding_orchestrator.schemas import (
     load_task_file,
 )
 from coding_orchestrator.tools.git import GitCheckpoint, GitManager
+from coding_orchestrator.tools.lock import ConcurrentExecutionError, RepoLock
 from coding_orchestrator.tools.patch import SafePatchApplier, parse_builder_output
 from coding_orchestrator.validators.code_validator import SyntaxValidator
 from coding_orchestrator.validators.patch_validator import PatchValidator
@@ -81,11 +84,8 @@ class WorkflowEngine:
         self.classifier = TaskClassifier()
         self.model_router = ModelRouter(config.model_routing)
         budget_settings = config.budget
-        ledger_path = Path(budget_settings.ledger_path)
-        if not ledger_path.is_absolute():
-            budget_settings = budget_settings.model_copy(
-                update={"ledger_path": str((self.repo_path / ledger_path).resolve())}
-            )
+        ledger_path = self._resolve_repo_path(budget_settings.ledger_path)
+        budget_settings = budget_settings.model_copy(update={"ledger_path": str(ledger_path)})
         self.budget = BudgetGuard(budget_settings, config.pricing)
         self.limits = LimitGuard(config.limits)
         self.tier_policy = BuilderServiceTierPolicy(config.inference.builder_service_tier)
@@ -94,21 +94,77 @@ class WorkflowEngine:
         self.diagnosis_reviewer = DiagnosisReviewer(config.diagnosis)
         self.reviewer_calls_this_run = 0
         self.reviewer_calls_by_task: dict[str, int] = {}
-        self.logger = JsonlLogger(Path(config.log_path))
+        log_path = self._resolve_repo_path(config.log_path)
+        state_path = self._resolve_repo_path(config.state_path)
+        escalations_path = self._resolve_repo_path(config.escalations_path)
+        self.logger = JsonlLogger(log_path)
         self.telegram = TelegramNotifier(config.telegram, budget_settings)
-        self.state_store = StateStore(Path(config.state_path))
-        self.escalation = EscalationManager(Path("logs/escalations"))
+        self.state_store = StateStore(state_path)
+        self.escalation = EscalationManager(escalations_path)
         self.git = GitManager(self.repo_path)
+        self._own_data_paths = self._relative_own_data_paths(
+            [ledger_path, log_path, state_path, escalations_path]
+        )
+        self._own_data_paths.append(".orchestrator.lock")
         self.patch_applier = SafePatchApplier(
             self.repo_path,
             self.config.validation,
             self.config.timeouts.max_attempt_runtime_seconds,
         )
 
+    def _resolve_repo_path(self, raw: str) -> Path:
+        """Resolve a configured data path against the repo root, never the caller's
+        current working directory, so logs/state/ledger/escalations land predictably
+        regardless of where the CLI is invoked from."""
+        path = Path(raw)
+        return path if path.is_absolute() else (self.repo_path / path).resolve()
+
+    def _preserve_files(self) -> list[str]:
+        return [*self.config.git.preserve_untracked_files, *self._own_data_paths]
+
+    def _changed_files(self) -> list[str]:
+        """git-detected changed files, excluding the orchestrator's own runtime data
+        (ledger/state/log/escalations) so its own bookkeeping is never mistaken for
+        task output by patch/permission validation or convergence's unrelated-file-
+        touch detection.
+        """
+        own = set(self._own_data_paths)
+        return [path for path in self.git.changed_files() if path not in own]
+
+    def _relative_own_data_paths(self, paths: list[Path]) -> list[str]:
+        """Paths (relative to repo root) the orchestrator itself writes operational
+        data to. Always excluded from git checkpoint/stash/clean, independent of the
+        configured preserve_untracked_dirs/files, so a target repo's own .gitignore
+        (or lack of one) can never cause the orchestrator to stash or delete its own
+        ledger, state, log, or escalation files.
+        """
+        relative: list[str] = []
+        for path in paths:
+            try:
+                relative.append(str(path.relative_to(self.repo_path)))
+            except ValueError:
+                continue
+        return relative
+
     def run_task_file(self, task_path: Path) -> OrchestratorState:
         return self.run_task(load_task_file(task_path))
 
     def run_task(self, task: TaskSpec) -> OrchestratorState:
+        try:
+            with RepoLock(self.repo_path):
+                return self._run_task_locked(task)
+        except ConcurrentExecutionError as exc:
+            state = self._initial_state(task)
+            state.final_status = "blocked"
+            self.logger.log(
+                "concurrent_execution_blocked",
+                request_id=state.request_id,
+                task_id=task.id,
+                error=str(exc),
+            )
+            return self._finish(state, "task_concurrent_execution_blocked")
+
+    def _run_task_locked(self, task: TaskSpec) -> OrchestratorState:
         state = self._initial_state(task)
         max_runtime = min(task.max_runtime_seconds, self.config.timeouts.max_task_runtime_seconds)
         guard = TimeoutGuard(max_runtime)
@@ -116,14 +172,24 @@ class WorkflowEngine:
         validation_errors: list[str] = []
         checkpoint: GitCheckpoint | None = None
         try:
-            checkpoint = self.git.checkpoint(task.id, self.config.git.require_clean_worktree)
+            checkpoint = self.git.checkpoint(
+                task.id,
+                self.config.git.require_clean_worktree,
+                preserve_dirs=self.config.git.preserve_untracked_dirs,
+                preserve_files=self._preserve_files(),
+            )
             if state.requires_human_approval:
                 state.final_status = "blocked"
+                self._rollback_if_checkpoint(checkpoint)
                 return self._finish(state, "task_blocked")
             while state.retry_count < task.max_attempts:
                 guard.check()
                 state.final_status = "running"
                 self._run_builder_step(task, state, validation_errors)
+                if state.tool_results.get("provider_dry_run"):
+                    state.final_status = "dry_run"
+                    self._rollback_if_checkpoint(checkpoint)
+                    return self._finish(state, "task_dry_run")
                 results = self.limits.enforce_validation_output(self._validate(task))
                 state.validation_results = {result.name: result.model_dump() for result in results}
                 validation_errors = [result.message for result in results if not result.passed]
@@ -133,10 +199,17 @@ class WorkflowEngine:
                 ):
                     self._record_limit_failure(state, "validation_output_limit_exceeded")
                 if not validation_errors:
+                    changed = self._changed_files()
+                    if not changed and state.selected_workflow not in NON_MODIFYING_WORKFLOWS:
+                        state.final_status = "no_change"
+                        self._rollback_if_checkpoint(checkpoint)
+                        return self._finish(state, "task_no_change")
                     self._record_attempt_metrics(task, state, results)
-                    self._commit(task, state)
+                    self.git.verify_head(checkpoint)
+                    self._commit(task, state, changed)
                     state.final_status = "completed"
                     self.budget.record(state)
+                    self.git.restore_pending_work(checkpoint)
                     return self._finish(state, "task_completed")
                 decision = self._record_attempt_metrics(task, state, results)
                 self.logger.log(
@@ -191,6 +264,16 @@ class WorkflowEngine:
         except Exception as exc:
             state.final_status = "failed"
             validation_errors.append(str(exc))
+            state.tool_results["error_type"] = type(exc).__name__
+            state.tool_results["error_traceback"] = traceback.format_exc()
+            self.logger.log(
+                "unexpected_error",
+                request_id=state.request_id,
+                task_id=task.id,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                traceback=traceback.format_exc(),
+            )
             self._rollback_if_checkpoint(checkpoint)
             self._escalate_if_allowed(task, state, validation_errors)
             return self._finish(state, "task_failed")
@@ -255,7 +338,9 @@ class WorkflowEngine:
             relevant_files=task.allowed_files,
             selected_model=model,
             selected_workflow=workflow,
-            requires_human_approval=model == "human-approval",
+            requires_human_approval=(
+                model == "human-approval" or not WORKFLOWS[workflow].enabled
+            ),
         )
         state.estimated_input_tokens = max(1, len(state.user_request) // 4)
         state.estimated_output_tokens = 1000
@@ -396,6 +481,7 @@ class WorkflowEngine:
                 state.tool_results["builder_provider"] = role.provider
                 state.tool_results["builder_backend"] = "role_provider"
                 state.tool_results["builder_warning"] = str(exc)
+                state.tool_results["provider_dry_run"] = True
                 return BuilderResult(
                     text=f"# Provider dry-run fallback for {role.provider}/{role.model}",
                     confidence=0.0,
@@ -409,7 +495,10 @@ class WorkflowEngine:
                     dry_run=True,
                 )
             except ProviderError as exc:
-                is_flex_timeout = tier == "flex" and self._is_flex_transient_error(str(exc))
+                is_transient = isinstance(
+                    exc, ProviderTransientError
+                ) or self._is_flex_transient_error(str(exc))
+                is_flex_timeout = tier == "flex" and is_transient
                 if is_flex_timeout:
                     self.tier_policy.record_timeout("flex")
                     state.tool_results["builder_timeout"] = {
@@ -430,6 +519,7 @@ class WorkflowEngine:
             state.tool_results["builder_backend"] = "role_provider"
             state.tool_results["builder_request"] = request.model_dump()
             state.tool_results["builder_response_usage"] = response.usage.model_dump()
+            self.budget.record_actual(estimate, response.usage)
             return self._provider_response_to_builder_result(response)
 
     def _is_flex_transient_error(self, error_text: str) -> bool:
@@ -512,7 +602,7 @@ class WorkflowEngine:
         self.budget.record_estimate(estimate, status="estimated")
 
     def _validate(self, task: TaskSpec) -> list[ValidationResult]:
-        changed = self.git.changed_files()
+        changed = self._changed_files()
         commands = task.validation_commands or self.config.validation.default_commands
         timeout = self.config.timeouts.max_attempt_runtime_seconds
         return [
@@ -530,8 +620,8 @@ class WorkflowEngine:
             TestValidator(commands, self.repo_path, timeout).validate(),
         ]
 
-    def _commit(self, task: TaskSpec, state: OrchestratorState) -> None:
-        result = self.git.commit_task(task.id, task.title, task.allowed_files)
+    def _commit(self, task: TaskSpec, state: OrchestratorState, changed_files: list[str]) -> None:
+        result = self.git.commit_task(task.id, task.title, changed_files, task.allowed_files)
         state.tool_results["git_commit"] = result.model_dump()
         if result.returncode != 0:
             raise CommitFailed(result.stderr or result.stdout or "git commit failed")
@@ -546,7 +636,7 @@ class WorkflowEngine:
         metrics = self.convergence.collect_attempt_metrics(
             attempt_number=state.retry_count + 1,
             validation_results=results,
-            changed_files=self.git.changed_files(),
+            changed_files=self._changed_files(),
             allowed_files=task.allowed_files,
             tool_results=state.tool_results,
             previous=previous,
@@ -575,7 +665,7 @@ class WorkflowEngine:
         self.git.rollback_to_checkpoint(
             checkpoint,
             self.config.git.preserve_untracked_dirs,
-            self.config.git.preserve_untracked_files,
+            self._preserve_files(),
         )
         if self._escalate_if_allowed(task, state, validation_errors):
             state.final_status = "escalated"
@@ -593,7 +683,7 @@ class WorkflowEngine:
         self.git.rollback_to_checkpoint(
             checkpoint,
             self.config.git.preserve_untracked_dirs,
-            self.config.git.preserve_untracked_files,
+            self._preserve_files(),
         )
         if (
             state.convergence_decision
@@ -801,7 +891,7 @@ class WorkflowEngine:
         self.git.rollback_to_checkpoint(
             checkpoint,
             self.config.git.preserve_untracked_dirs,
-            self.config.git.preserve_untracked_files,
+            self._preserve_files(),
         )
 
     def _compact_feedback(self, state: OrchestratorState) -> str:

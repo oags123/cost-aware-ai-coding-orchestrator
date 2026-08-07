@@ -10,8 +10,10 @@ from coding_orchestrator.models.provider import (
     ModelProvider,
     ModelUsage,
     ProviderConfigurationError,
+    ProviderError,
     ProviderRequest,
     ProviderResponse,
+    ProviderTransientError,
     StructuredOutputError,
 )
 
@@ -35,7 +37,8 @@ class OpenAIProvider(ModelProvider):
                 f"OpenAI API key environment variable is not set: {self.settings.api_key_env_var}"
             )
         try:
-            from openai import OpenAI  # type: ignore[import-not-found]
+            import openai
+            from openai import OpenAI
         except ImportError as exc:
             raise ProviderConfigurationError(
                 "OpenAI Python SDK is not installed. Install the `openai` package to enable "
@@ -53,18 +56,39 @@ class OpenAIProvider(ModelProvider):
             if request.role.reasoning_effort in {"none", "low", "medium", "high", "xhigh"}
             else None
         )
-        api_response = client.responses.create(
-            model=request.role.model,
-            input=request.prompt,
-            instructions=request.system_prompt,
-            max_output_tokens=request.role.max_output_tokens,
-            text={"verbosity": request.role.verbosity},
-            reasoning=reasoning,
-            tools=[],
-            store=False,
-            service_tier=request.role.service_tier,
-            metadata=request.metadata,
-        )
+        try:
+            # The SDK's TypedDict params (`text`, `reasoning`) don't structurally match
+            # our dynamically-built dicts under mypy even though they're valid at runtime.
+            api_response = client.responses.create(  # type: ignore[call-overload]
+                model=request.role.model,
+                input=request.prompt,
+                instructions=request.system_prompt,
+                max_output_tokens=request.role.max_output_tokens,
+                text={"verbosity": request.role.verbosity},
+                reasoning=reasoning,
+                tools=[],
+                store=False,
+                service_tier=request.role.service_tier,
+                metadata=request.metadata,
+            )
+        except (
+            openai.AuthenticationError,
+            openai.PermissionDeniedError,
+            openai.NotFoundError,
+        ) as exc:
+            raise ProviderConfigurationError(
+                f"OpenAI provider configuration rejected by API: {exc}"
+            ) from exc
+        except (
+            openai.RateLimitError,
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.InternalServerError,
+            openai.ConflictError,
+        ) as exc:
+            raise ProviderTransientError(f"OpenAI transient error: {exc}") from exc
+        except openai.OpenAIError as exc:
+            raise ProviderError(f"OpenAI API error: {exc}") from exc
         text = cast(str, getattr(api_response, "output_text", "") or "")
         structured: BuilderOutput | dict[str, Any] | None = None
         is_builder_json = (
@@ -81,8 +105,14 @@ class OpenAIProvider(ModelProvider):
             if isinstance(candidate, dict):
                 try:
                     structured = BuilderOutput.model_validate(candidate)
-                except Exception:
-                    structured = candidate
+                except Exception as exc:
+                    raise StructuredOutputError(
+                        f"builder JSON output failed schema validation: {exc}"
+                    ) from exc
+            else:
+                raise StructuredOutputError(
+                    "builder JSON output must be a JSON object matching the builder patch contract"
+                )
 
         usage_data = getattr(api_response, "usage", None)
         usage = ModelUsage(

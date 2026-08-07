@@ -1,20 +1,60 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from coding_orchestrator.config import AppConfig, BudgetSettings, ValidationSettings
+from coding_orchestrator.models.fake_provider import FakeModelProvider
+from coding_orchestrator.models.provider import BuilderOutput
 from coding_orchestrator.models.router import ModelRouter
 from coding_orchestrator.orchestrator.budget import BudgetGuard
 from coding_orchestrator.orchestrator.engine import WorkflowEngine, order_tasks
 from coding_orchestrator.orchestrator.router import TaskClassifier
 from coding_orchestrator.orchestrator.timeouts import TimeoutGuard
-from coding_orchestrator.schemas import CommandResult, OrchestratorState, TaskSpec, ValidationResult
+from coding_orchestrator.schemas import (
+    BuilderResult,
+    CommandResult,
+    OrchestratorState,
+    TaskSpec,
+    ValidationResult,
+)
 from coding_orchestrator.tools.shell import run_limited_command
 from coding_orchestrator.validators.patch_validator import PatchValidator
 from coding_orchestrator.validators.permission_validator import PermissionValidator
+
+
+def init_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+
+
+def commit_file(path: Path, relative: str, content: str) -> None:
+    target = path / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "add", relative], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
+
+
+def real_patch_provider(touched_file: str = "app.py", attempts: int = 1) -> FakeModelProvider:
+    output = BuilderOutput(
+        patch=(
+            f"diff --git a/{touched_file} b/{touched_file}\n"
+            f"--- a/{touched_file}\n"
+            f"+++ b/{touched_file}\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        ),
+        touched_files=[touched_file],
+        summary="test patch",
+        confidence=0.8,
+    )
+    return FakeModelProvider([output] * attempts)
 
 
 def test_task_and_complexity_classification() -> None:
@@ -91,16 +131,22 @@ def test_dependency_ordering() -> None:
 
 
 def test_workflow_success_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "old\n")
     config = AppConfig(
         repo_path=str(tmp_path),
         state_path=str(tmp_path / "state.json"),
         log_path=str(tmp_path / "log.jsonl"),
     )
-    engine = WorkflowEngine(config)
-    task = TaskSpec(id="T-1", title="Fix bug", validation_commands=["python -c 'pass'"])
+    engine = WorkflowEngine(config, provider_overrides={"openai": real_patch_provider()})
+    task = TaskSpec(
+        id="T-1",
+        title="Fix bug",
+        allowed_files=["app.py"],
+        validation_commands=["python -c 'pass'"],
+    )
 
     monkeypatch.setattr(engine, "_validate", lambda task: [])
-    monkeypatch.setattr(engine, "_commit", lambda task, state: None)
 
     state = engine.run_task(task)
 
@@ -111,15 +157,27 @@ def test_workflow_failure_retries_rolls_back_and_escalates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "old\n")
     config = AppConfig(
         repo_path=str(tmp_path),
         state_path=str(tmp_path / "state.json"),
         log_path=str(tmp_path / "log.jsonl"),
     )
     engine = WorkflowEngine(config)
-    task = TaskSpec(id="T-1", title="Fix bug", max_attempts=2, escalation_allowed=True)
+    task = TaskSpec(
+        id="T-1",
+        title="Fix bug",
+        max_attempts=2,
+        escalation_allowed=True,
+        allowed_files=["app.py"],
+    )
     rollback_calls: list[bool] = []
 
+    def no_op_builder(task: TaskSpec, state: OrchestratorState, context: str) -> BuilderResult:
+        return BuilderResult(text="", confidence=0.0, estimated_output_tokens=1, dry_run=False)
+
+    monkeypatch.setattr(engine, "_run_tiered_builder", no_op_builder)
     monkeypatch.setattr(
         engine,
         "_validate",
@@ -141,19 +199,21 @@ def test_workflow_failure_retries_rolls_back_and_escalates(
 
 
 def test_commit_failure_does_not_complete(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "old\n")
     config = AppConfig(
         repo_path=str(tmp_path),
         state_path=str(tmp_path / "state.json"),
         log_path=str(tmp_path / "log.jsonl"),
     )
-    engine = WorkflowEngine(config)
-    task = TaskSpec(id="T-1", title="Fix bug", max_attempts=1)
+    engine = WorkflowEngine(config, provider_overrides={"openai": real_patch_provider()})
+    task = TaskSpec(id="T-1", title="Fix bug", max_attempts=1, allowed_files=["app.py"])
 
     monkeypatch.setattr(engine, "_validate", lambda task: [])
     monkeypatch.setattr(
         engine.git,
         "commit_task",
-        lambda task_id, title, allowed_files: CommandResult(
+        lambda task_id, title, changed_files, allowed_files: CommandResult(
             command=["git", "commit"],
             returncode=128,
             stdout="",

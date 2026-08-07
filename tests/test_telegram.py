@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.request import Request
@@ -15,6 +16,16 @@ from coding_orchestrator.observability.telegram import (
 )
 from coding_orchestrator.orchestrator.engine import WorkflowEngine
 from coding_orchestrator.schemas import TaskSpec
+
+
+def init_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+    target = path / "app.py"
+    target.write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
 
 
 def test_telegram_disabled_does_not_call_http(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,6 +117,7 @@ def test_telegram_missing_env_warn_or_fail() -> None:
 
 
 def test_engine_sends_blocked_alert(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    init_repo(tmp_path)
     alerts: list[TelegramAlert] = []
     config = AppConfig(
         repo_path=str(tmp_path),

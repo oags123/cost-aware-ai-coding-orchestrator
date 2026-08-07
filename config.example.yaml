@@ -2,6 +2,10 @@ schema_version: 3
 repo_path: "."
 state_path: "logs/state.json"
 log_path: "logs/orchestrator.jsonl"
+# All of the above (plus budget.ledger_path) are resolved relative to repo_path,
+# never the process's current working directory, and are always excluded from
+# git checkpoint/stash/clean regardless of the target repo's own .gitignore.
+escalations_path: "logs/escalations"
 
 providers:
   openai:
@@ -10,7 +14,10 @@ providers:
     api_key_env_var: "OPENAI_API_KEY"
     base_url: null
     request_timeout_seconds: 300
-    max_retries: 0
+    # SDK-level retries for transient errors (rate limits/timeouts/connection
+    # errors) before the orchestrator's own flex->default service-tier fallback
+    # is even considered. Conservative but non-zero by default.
+    max_retries: 2
 
 model_aliases:
   openai_classifier_nano: "gpt-5-nano"

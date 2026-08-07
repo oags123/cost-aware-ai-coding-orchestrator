@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from coding_orchestrator.config import BudgetSettings, ModelPricing, PricingSettings
+from coding_orchestrator.models.provider import ModelUsage
 from coding_orchestrator.schemas import OrchestratorState, TaskSpec
 
 
@@ -109,6 +110,45 @@ class BudgetLedger:
                     datetime.now(UTC).isoformat(),
                     status or estimate.status,
                 ),
+            )
+
+    def record_actual_usage(
+        self,
+        *,
+        project_id: str,
+        task_id: str | None,
+        attempt_id: int,
+        model_role: str,
+        actual_input_tokens: int,
+        actual_output_tokens: int,
+        actual_cost_usd: float,
+        status: str = "completed",
+    ) -> None:
+        """Idempotently true-up the most recent un-reconciled estimate row for this
+        call with real provider usage. Updates in place (never inserts a new row) so
+        actual spend is never double-counted alongside its originating estimate.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM budget_events
+                WHERE project_id = ? AND attempt_id = ? AND model_role = ?
+                  AND (task_id = ? OR (task_id IS NULL AND ? IS NULL))
+                  AND actual_cost_usd IS NULL
+                ORDER BY id DESC LIMIT 1
+                """,
+                (project_id, attempt_id, model_role, task_id, task_id),
+            ).fetchone()
+            if row is None:
+                return
+            conn.execute(
+                """
+                UPDATE budget_events
+                SET actual_input_tokens = ?, actual_output_tokens = ?,
+                    actual_cost_usd = ?, status = ?
+                WHERE id = ?
+                """,
+                (actual_input_tokens, actual_output_tokens, actual_cost_usd, status, row[0]),
             )
 
     def spend_for_project(self, project_id: str) -> float:
@@ -393,6 +433,31 @@ class BudgetGuard:
     def record_estimate(self, estimate: BudgetEstimate, status: str = "estimated") -> None:
         assert self.ledger is not None
         self.ledger.record(estimate, status=status)
+
+    def record_actual(
+        self,
+        estimate: BudgetEstimate,
+        usage: ModelUsage,
+        status: str = "completed",
+    ) -> None:
+        """Reconcile real provider token usage/cost into the ledger for the call
+        this estimate was made for. Safe to call at most once per attempt; a repeat
+        call for an already-reconciled attempt is a no-op (see record_actual_usage).
+        """
+        assert self.ledger is not None
+        pricing = self.pricing_for_role(estimate.model_role, estimate.inference_tier)
+        input_cost = (usage.input_tokens / 1_000_000.0) * pricing.input_usd_per_1m_tokens
+        output_cost = (usage.output_tokens / 1_000_000.0) * pricing.output_usd_per_1m_tokens
+        self.ledger.record_actual_usage(
+            project_id=estimate.project_id,
+            task_id=estimate.task_id,
+            attempt_id=estimate.attempt_id,
+            model_role=estimate.model_role,
+            actual_input_tokens=usage.input_tokens,
+            actual_output_tokens=usage.output_tokens,
+            actual_cost_usd=input_cost + output_cost,
+            status=status,
+        )
 
     def report(
         self,

@@ -24,6 +24,11 @@ class Workflow:
         )
 
 
+NON_MODIFYING_WORKFLOWS: frozenset[str] = frozenset(
+    {"explain_code", "architecture_review", "security_review"}
+)
+
+
 WORKFLOWS: dict[str, Workflow] = {
     "explain_code": Workflow("explain_code", "Explain relevant code within allowed context."),
     "fix_bug": Workflow("fix_bug", "Produce a minimal bug-fix patch."),

@@ -22,13 +22,35 @@ Local Python orchestrator for bounded coding workflows with strict safety gates.
 
 ## Quick Start
 
-1. Create a virtual environment and install dependencies.
+1. `python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"`
+   (for exact, reproducible dependency versions, also run
+   `.venv/bin/pip install -r requirements-lock.txt`)
 2. Copy `config.example.yaml` to `config.yaml`.
-3. For fake-provider local runs, keep OpenAI runtime disabled.
-4. For real OpenAI calls, set `OPENAI_API_KEY` and enable `providers.openai.runtime_enabled`.
+3. For fake-provider/no-network local runs, keep `providers.openai.runtime_enabled: false`
+   (the default). Tasks will report `dry_run`, not `completed` — see "Task Outcomes" below.
+4. For real OpenAI calls, export `OPENAI_API_KEY` and set `providers.openai.runtime_enabled: true`.
 5. Run:
-   - `python -m coding_orchestrator.app run --task tasks/example_task.md`
-   - `python -m coding_orchestrator.app report`
+   - `.venv/bin/coding-orchestrator run --task tasks/example_task.md`
+   - `.venv/bin/coding-orchestrator report`
+   - (equivalently: `python -m coding_orchestrator.app run --task tasks/example_task.md`)
+
+## Task Outcomes
+
+A task's `final_status` is one of: `completed`, `dry_run`, `no_change`, `blocked`,
+`escalated`, `failed`, `timeout`, or `skipped`. Only `completed` means a real model call
+produced a validated, committed change. In particular:
+
+- `dry_run` — the provider was disabled, misconfigured, or missing credentials; no model
+  was called and nothing changed. This used to be silently reported as `completed`; it no
+  longer is.
+- `no_change` — the provider was called but produced no patch (or an empty one) for a task
+  whose workflow requires a modification (`explain_code`/`architecture_review`/
+  `security_review` are exempt, since they're not expected to change files).
+- `blocked` — budget, limit, human-approval, or concurrent-execution-lock gate tripped
+  before/without ever calling a model.
+
+The CLI's exit code reflects this: `run`/`run-all` exit non-zero unless every task actually
+`completed` (or was legitimately `skipped`).
 
 ## Role Defaults
 
@@ -53,6 +75,37 @@ Legacy names remain accepted for backward compatibility only:
 - `.venv/bin/mypy .`
 - `.venv/bin/pytest`
 
+These three run automatically on every push/PR via `.github/workflows/ci.yml`.
+
+## Safety Guarantees
+
+- Concurrent runs against the same repository are refused (advisory file lock), not
+  silently interleaved.
+- Any pre-existing uncommitted work in the target repo (tracked or untracked, excluding the
+  orchestrator's own logs/state/ledger) is stashed at task start and always restored —
+  whether the task succeeds, fails, or is rolled back.
+- Commits only ever stage files that are both actually changed by the task's patch *and*
+  listed in the task's `allowed_files` — never unrelated pre-existing dirty files.
+- Patches are rejected if they touch forbidden paths, escape the workspace, use absolute
+  paths, create/modify symlinks, or declare files inconsistent with the actual diff content.
+- If the repository's HEAD moves between checkpoint and commit (e.g. another process pushed
+  a commit), the task fails safely instead of committing on top of unexpected state.
+
+See [Safety](docs/SAFETY.md) for the full design.
+
+## Known Limitations
+
+- Only the OpenAI provider has a real implementation; other providers are not integrated.
+- The diagnosis/reviewer escalation path (`frontier_reviewer`/`emergency_pro_reviewer`) has
+  no live model integration — it is dry-run/placeholder only (`diagnosis.dry_run: true`
+  by default). Escalations beyond the builder retry loop require human review of the
+  generated escalation package under `logs/escalations/`.
+- If a builder's patch fails to parse or apply on a retry attempt (rather than merely
+  failing validation), that attempt aborts the task rather than retrying — this is a
+  narrower failure mode than an ordinary validation failure.
+- `small_refactor`, `large_refactor`, `architecture_review`, `dependency_update`, and
+  `security_review` workflows are defined but not enabled (`Workflow.enabled=False`).
+
 ## Docs
 
 - [Architecture](docs/ARCHITECTURE.md)
@@ -60,3 +113,4 @@ Legacy names remain accepted for backward compatibility only:
 - [Model Roles](docs/MODEL_ROLES.md)
 - [Cost Control](docs/COST_CONTROL.md)
 - [Safety](docs/SAFETY.md)
+- [Operational Hardening Changes](docs/OPERATIONAL_HARDENING_CHANGES.md)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from coding_orchestrator.config import (
@@ -8,6 +9,7 @@ from coding_orchestrator.config import (
     ConvergenceSettings,
     DiagnosisSettings,
 )
+from coding_orchestrator.models.fake_provider import FakeModelProvider
 from coding_orchestrator.orchestrator.budget import BudgetExceeded
 from coding_orchestrator.orchestrator.diagnosis import (
     DiagnosisError,
@@ -69,6 +71,16 @@ def test_dry_run_diagnosis_interface_returns_structured_result() -> None:
     assert not result.direct_patch_proposed
 
 
+def init_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+    target = path / "app.py"
+    target.write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
+
+
 def config(tmp_path: Path, diagnosis: DiagnosisSettings) -> AppConfig:
     return AppConfig(
         repo_path=str(tmp_path),
@@ -88,7 +100,11 @@ def config(tmp_path: Path, diagnosis: DiagnosisSettings) -> AppConfig:
 
 
 def test_diagnosis_disabled_still_creates_review_packet(tmp_path: Path) -> None:
-    engine = WorkflowEngine(config(tmp_path, DiagnosisSettings(enabled=False)))
+    init_repo(tmp_path)
+    engine = WorkflowEngine(
+        config(tmp_path, DiagnosisSettings(enabled=False)),
+        provider_overrides={"openai": FakeModelProvider(["", ""])},
+    )
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
     engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
 
@@ -100,7 +116,11 @@ def test_diagnosis_disabled_still_creates_review_packet(tmp_path: Path) -> None:
 
 
 def test_diagnosis_enabled_dry_run_records_result(tmp_path: Path) -> None:
-    engine = WorkflowEngine(config(tmp_path, DiagnosisSettings(enabled=True, dry_run=True)))
+    init_repo(tmp_path)
+    engine = WorkflowEngine(
+        config(tmp_path, DiagnosisSettings(enabled=True, dry_run=True)),
+        provider_overrides={"openai": FakeModelProvider(["", ""])},
+    )
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
     engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
 
@@ -111,11 +131,12 @@ def test_diagnosis_enabled_dry_run_records_result(tmp_path: Path) -> None:
 
 
 def test_diagnosis_budget_block_blocks_reviewer_call(tmp_path: Path) -> None:
+    init_repo(tmp_path)
     app_config = config(tmp_path, DiagnosisSettings(enabled=True, dry_run=True))
     app_config.budget = app_config.budget.model_copy(
         update={"role_budgets_usd": {"frontier_reviewer": 0.0}}
     )
-    engine = WorkflowEngine(app_config)
+    engine = WorkflowEngine(app_config, provider_overrides={"openai": FakeModelProvider(["", ""])})
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
     engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
 
@@ -173,6 +194,7 @@ def test_valid_diagnosis_accepted() -> None:
 
 
 def test_diagnosis_feeds_guided_builder_retry(tmp_path: Path) -> None:
+    init_repo(tmp_path)
     engine = WorkflowEngine(
         config(
             tmp_path,
@@ -180,6 +202,11 @@ def test_diagnosis_feeds_guided_builder_retry(tmp_path: Path) -> None:
         ).model_copy(update={"convergence": ConvergenceSettings(max_stagnant_attempts=0)})
     )
     contexts: list[str] = []
+    validations = [
+        [ValidationResult(name="tests", passed=False, message="failed")],
+        [ValidationResult(name="tests", passed=False, message="failed")],
+        [],
+    ]
 
     def fake_builder(
         task: TaskSpec,
@@ -187,16 +214,21 @@ def test_diagnosis_feeds_guided_builder_retry(tmp_path: Path) -> None:
         context: str,
     ) -> BuilderResult:
         contexts.append(context)
-        return BuilderResult(text="", confidence=0.0, estimated_output_tokens=1, dry_run=True)
-
-    validations = [
-        [ValidationResult(name="tests", passed=False, message="failed")],
-        [ValidationResult(name="tests", passed=False, message="failed")],
-        [],
-    ]
+        if len(validations) > 1:
+            # Not the final (passing) attempt yet: no-op, matching the original
+            # working tree so the next attempt can cleanly apply a real patch.
+            return BuilderResult(text="", confidence=0.0, estimated_output_tokens=1, dry_run=False)
+        patch_json = (
+            '{"patch":"diff --git a/app.py b/app.py\\n--- a/app.py\\n+++ b/app.py\\n'
+            '@@ -1 +1 @@\\n-old\\n+new\\n",'
+            '"touched_files":["app.py"],"summary":"guided fix","confidence":0.7}'
+        )
+        return BuilderResult(
+            text=patch_json, confidence=0.7, estimated_output_tokens=1, dry_run=False
+        )
     engine._run_tiered_builder = fake_builder  # type: ignore[method-assign]  # noqa: SLF001
     engine._validate = lambda task: validations.pop(0)  # type: ignore[method-assign]  # noqa: SLF001
-    engine._commit = lambda task, state: None  # type: ignore[method-assign]  # noqa: SLF001
+    engine._commit = lambda task, state, changed_files: None  # type: ignore[method-assign]  # noqa: SLF001
 
     state = engine.run_task(
         TaskSpec(id="T-GUIDED", title="Fix bug", max_attempts=3, max_cost_usd=10)

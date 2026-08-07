@@ -18,6 +18,8 @@ FinalStatus = Literal[
     "escalated",
     "skipped",
     "timeout",
+    "dry_run",
+    "no_change",
 ]
 WorkflowName = Literal[
     "explain_code",

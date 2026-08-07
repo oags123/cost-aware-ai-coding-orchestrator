@@ -20,6 +20,10 @@ class StructuredOutputError(ProviderError):
     pass
 
 
+class ProviderTransientError(ProviderError):
+    """Raised for retryable provider failures (rate limits, timeouts, connection errors)."""
+
+
 class BuilderOutput(BaseModel):
     patch: str
     touched_files: list[str] = Field(default_factory=list)

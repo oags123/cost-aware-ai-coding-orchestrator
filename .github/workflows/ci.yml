@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure git identity (needed by git-safety tests)
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI Runner"
+
+      - name: Install package with dev dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: ruff
+        run: ruff check .
+
+      - name: mypy
+        run: mypy .
+
+      - name: pytest
+        run: pytest -q
+
+      - name: Import / packaging smoke test
+        run: python -c "import coding_orchestrator.app"
+
+      - name: CLI report smoke test
+        run: python -m coding_orchestrator.app report

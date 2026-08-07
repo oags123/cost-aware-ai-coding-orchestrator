@@ -431,7 +431,7 @@ class OpenAIProviderSettings(BaseModel):
     api_key_env_var: str = "OPENAI_API_KEY"
     base_url: str | None = None
     request_timeout_seconds: int = 300
-    max_retries: int = 0
+    max_retries: int = 2
 
 
 class ProviderSettings(BaseModel):
@@ -704,6 +704,7 @@ class AppConfig(BaseModel):
     repo_path: str = "."
     state_path: str = "logs/state.json"
     log_path: str = "logs/orchestrator.jsonl"
+    escalations_path: str = "logs/escalations"
     providers: ProviderSettings = Field(default_factory=ProviderSettings)
     model_aliases: ModelAliasSettings = Field(default_factory=ModelAliasSettings)
     model_roles: ModelRoleRegistry = Field(default_factory=ModelRoleRegistry)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,16 @@ from coding_orchestrator.orchestrator.engine import WorkflowEngine
 from coding_orchestrator.orchestrator.limits import LimitExceeded, LimitGuard
 from coding_orchestrator.schemas import BuilderResult, TaskSpec, ValidationResult
 from coding_orchestrator.tools.patch import parse_builder_output
+
+
+def init_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+    target = path / "app.py"
+    target.write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
 
 
 def pricing(output_tokens: int = 1000) -> PricingSettings:
@@ -52,6 +63,7 @@ def app_config(tmp_path: Path, limits: LimitSettings, output_tokens: int = 1000)
 
 
 def test_context_too_large_blocks_call_and_records_ledger(tmp_path: Path) -> None:
+    init_repo(tmp_path)
     engine = WorkflowEngine(
         app_config(
             tmp_path,
@@ -71,6 +83,7 @@ def test_context_too_large_blocks_call_and_records_ledger(tmp_path: Path) -> Non
 
 
 def test_output_token_estimate_blocks_call(tmp_path: Path) -> None:
+    init_repo(tmp_path)
     engine = WorkflowEngine(
         app_config(
             tmp_path,
@@ -151,6 +164,7 @@ def test_validation_output_too_large_can_be_summarized_safely() -> None:
 
 
 def test_budget_ledger_records_limit_blocked_calls(tmp_path: Path) -> None:
+    init_repo(tmp_path)
     engine = WorkflowEngine(
         app_config(
             tmp_path,

@@ -14,7 +14,7 @@ from coding_orchestrator.config import (
     PricingSettings,
 )
 from coding_orchestrator.models.fake_provider import FakeModelProvider
-from coding_orchestrator.models.provider import ProviderError, ProviderRequest
+from coding_orchestrator.models.provider import BuilderOutput, ProviderError, ProviderRequest
 from coding_orchestrator.orchestrator.engine import WorkflowEngine
 from coding_orchestrator.schemas import TaskSpec
 
@@ -27,6 +27,26 @@ def init_repo(path: Path) -> None:
     target.write_text("old\n", encoding="utf-8")
     subprocess.run(["git", "add", "app.py"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
+
+
+def real_patch_provider() -> FakeModelProvider:
+    return FakeModelProvider(
+        [
+            BuilderOutput(
+                patch=(
+                    "diff --git a/app.py b/app.py\n"
+                    "--- a/app.py\n"
+                    "+++ b/app.py\n"
+                    "@@ -1 +1 @@\n"
+                    "-old\n"
+                    "+new\n"
+                ),
+                touched_files=["app.py"],
+                summary="tier policy test patch",
+                confidence=0.6,
+            )
+        ]
+    )
 
 
 def pricing(output_tokens: int = 100) -> PricingSettings:
@@ -82,10 +102,10 @@ def config(
 
 def test_flex_selected_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     init_repo(tmp_path)
-    provider = FakeModelProvider([""])
+    provider = real_patch_provider()
     engine = WorkflowEngine(config(tmp_path), provider_overrides={"openai": provider})
     monkeypatch.setattr(engine, "_validate", lambda task: [])
-    monkeypatch.setattr(engine, "_commit", lambda task, state: None)
+    monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(
         TaskSpec(id="T-FLEX", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
@@ -110,7 +130,7 @@ def test_default_service_tier_fallback_after_flex_timeout_threshold(
         )
     )
     monkeypatch.setattr(engine, "_validate", lambda task: [])
-    monkeypatch.setattr(engine, "_commit", lambda task, state: None)
+    monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     call_count = {"n": 0}
 
@@ -118,7 +138,7 @@ def test_default_service_tier_fallback_after_flex_timeout_threshold(
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise ProviderError("429 resource unavailable on flex tier")
-        return FakeModelProvider([""]).generate(request)
+        return real_patch_provider().generate(request)
 
     monkeypatch.setattr(engine.openai_provider, "generate", flaky_generate)
 
@@ -197,10 +217,10 @@ def test_report_includes_service_tier_usage(
     tmp_path: Path,
 ) -> None:
     init_repo(tmp_path)
-    provider = FakeModelProvider([""])
+    provider = real_patch_provider()
     engine = WorkflowEngine(config(tmp_path), provider_overrides={"openai": provider})
     monkeypatch.setattr(engine, "_validate", lambda task: [])
-    monkeypatch.setattr(engine, "_commit", lambda task, state: None)
+    monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     engine.run_task(
         TaskSpec(id="T-REPORT", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])

@@ -7,6 +7,19 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
 
+For an exactly reproducible environment (matching what CI runs), also install the pinned
+lockfile after the editable install:
+
+```bash
+.venv/bin/pip install -r requirements-lock.txt
+```
+
+Regenerate it after intentionally changing a dependency:
+
+```bash
+.venv/bin/pip freeze | grep -v '^-e ' > requirements-lock.txt
+```
+
 ## Required Checks
 
 ```bash
@@ -14,6 +27,8 @@ python3 -m venv .venv
 .venv/bin/ruff check .
 .venv/bin/mypy .
 ```
+
+These run automatically in CI (`.github/workflows/ci.yml`) on every push and pull request.
 
 ## Coding Conventions
 

@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from coding_orchestrator.config import AppConfig, BudgetSettings, ConvergenceSettings
+from coding_orchestrator.models.fake_provider import FakeModelProvider
 from coding_orchestrator.orchestrator.convergence import ConvergenceEvaluator
 from coding_orchestrator.orchestrator.engine import WorkflowEngine
 from coding_orchestrator.schemas import AttemptMetrics, TaskSpec, ValidationResult
+
+
+def init_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+    target = path / "app.py"
+    target.write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
 
 
 def metrics(
@@ -107,6 +119,7 @@ def test_hard_stop_conditions() -> None:
 
 
 def test_diagnosis_needed_package_generated(tmp_path: Path) -> None:
+    init_repo(tmp_path)
     config = AppConfig(
         repo_path=str(tmp_path),
         state_path=str(tmp_path / "state.json"),
@@ -121,7 +134,7 @@ def test_diagnosis_needed_package_generated(tmp_path: Path) -> None:
         ),
         convergence=ConvergenceSettings(max_stagnant_attempts=0),
     )
-    engine = WorkflowEngine(config)
+    engine = WorkflowEngine(config, provider_overrides={"openai": FakeModelProvider(["", ""])})
     task = TaskSpec(id="T-CONV", title="Fix bug", max_attempts=2, max_cost_usd=10)
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
     engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
