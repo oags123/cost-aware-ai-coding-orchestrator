@@ -129,6 +129,25 @@ def test_disabled_workflow_requires_human_approval(tmp_path: Path) -> None:
     assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old\n"
 
 
+def test_explain_code_workflow_accepts_prose_response_without_patch_parsing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Regression test: a real model returning free-text prose (not a diff/JSON patch)
+    # for a non-modifying workflow must not be treated as a parse failure.
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "old\n")
+    provider = FakeModelProvider(["## Explanation\n\nThis package does X, Y, Z."])
+    engine = WorkflowEngine(base_config(tmp_path), provider_overrides={"openai": provider})
+    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    task = TaskSpec(id="T-1", title="Explain the code")
+
+    state = engine.run_task(task)
+
+    assert state.final_status == "completed"
+    assert "explanation" in state.tool_results["builder"]["text"].lower()
+    assert "patch" not in state.tool_results
+
+
 def test_explain_code_workflow_may_complete_without_changes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

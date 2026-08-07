@@ -4,6 +4,10 @@ from dataclasses import dataclass
 
 from coding_orchestrator.schemas import OrchestratorState, TaskSpec
 
+NON_MODIFYING_WORKFLOWS: frozenset[str] = frozenset(
+    {"explain_code", "architecture_review", "security_review"}
+)
+
 
 @dataclass(frozen=True)
 class Workflow:
@@ -12,6 +16,13 @@ class Workflow:
     enabled: bool = True
 
     def build_context(self, task: TaskSpec, state: OrchestratorState) -> str:
+        rules = (
+            "Rules: respond with plain-text analysis only; do not output a patch, diff, "
+            "or code block; no shell commands; no secret access."
+            if self.name in NON_MODIFYING_WORKFLOWS
+            else "Rules: output patches only for allowed files; no shell commands; "
+            "no secret access."
+        )
         return (
             f"Task: {task.id} - {task.title}\n"
             f"Description:\n{task.description}\n\n"
@@ -20,13 +31,8 @@ class Workflow:
             f"Risk: {state.risk_level}\n"
             f"Allowed files: {', '.join(task.allowed_files) or '(none)'}\n"
             f"Retry: {state.retry_count}\n"
-            "Rules: output patches only for allowed files; no shell commands; no secret access."
+            f"{rules}"
         )
-
-
-NON_MODIFYING_WORKFLOWS: frozenset[str] = frozenset(
-    {"explain_code", "architecture_review", "security_review"}
-)
 
 
 WORKFLOWS: dict[str, Workflow] = {

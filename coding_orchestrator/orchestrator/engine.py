@@ -403,6 +403,10 @@ class WorkflowEngine:
         }
         if response.dry_run:
             return
+        if state.selected_workflow in NON_MODIFYING_WORKFLOWS:
+            # explain_code/architecture_review/security_review produce prose, not a
+            # patch -- never attempt to parse their output as a diff.
+            return
         parsed = parse_builder_output(response.text)
         if parsed is None:
             return
