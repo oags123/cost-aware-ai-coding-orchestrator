@@ -217,7 +217,7 @@ def test_budget_ledger_records_provider_role_and_service_tier(
     assert row is not None
     assert row[0] in {"mechanical_worker", "simple_builder", "general_builder"}
     assert row[1] == "openai"
-    assert row[2] in {"gpt-5.4-nano", "gpt-5.4-mini"}
+    assert row[2] in {"gpt-5-nano", "gpt-5-mini"}
     assert row[3] in {"flex", "default"}
 
 

@@ -7,6 +7,8 @@ import pytest
 from coding_orchestrator.config import (
     AppConfig,
     ConfigResolutionError,
+    ModelAliasSettings,
+    ModelPricing,
     load_config,
     resolve_model_role,
 )
@@ -26,27 +28,28 @@ def test_default_openai_model_roles_are_configured() -> None:
     assert config.providers.openai.api_key_env_var == "OPENAI_API_KEY"
     assert not config.providers.openai.runtime_enabled
     assert config.model_aliases.openai_classifier_nano == "gpt-5-nano"
-    assert config.model_aliases.openai_nano == "gpt-5.4-nano"
-    assert config.model_aliases.openai_mini == "gpt-5.4-mini"
+    assert config.model_aliases.openai_mini_legacy == "gpt-5-mini"
     assert config.model_aliases.openai_codex == "gpt-5.3-codex"
-    assert config.model_aliases.openai_frontier == "gpt-5.5"
-    assert config.model_aliases.openai_frontier_pro == "gpt-5.5-pro"
+    assert config.model_aliases.openai_legacy_reasoning == "gpt-5"
 
     mechanical = config.model_roles.roles["mechanical_worker"]
-    assert mechanical.model_alias == "openai_nano"
+    assert mechanical.model_alias == "openai_classifier_nano"
     assert mechanical.reasoning_effort == "low"
     assert mechanical.verbosity == "low"
     assert mechanical.default_service_tier == "flex"
     assert mechanical.fallback_service_tier is None
 
     reviewer = config.model_roles.roles["frontier_reviewer"]
-    assert reviewer.model_alias == "openai_frontier"
+    assert reviewer.model_alias == "openai_legacy_reasoning"
     assert not reviewer.allow_direct_patch
     assert reviewer.budget_pool == "reviewer"
-    assert config.model_roles.roles["general_builder"].model_alias == "openai_mini"
+    assert config.model_roles.roles["general_builder"].model_alias == "openai_mini_legacy"
     # coding_optimized_builder was retargeted from gpt-5.3-codex (openai_codex) to
-    # gpt-5.4-mini (openai_mini) because codex does not support Flex.
-    assert config.model_roles.roles["coding_optimized_builder"].model_alias == "openai_mini"
+    # gpt-5 (openai_legacy_reasoning) because codex does not support Flex.
+    assert (
+        config.model_roles.roles["coding_optimized_builder"].model_alias
+        == "openai_legacy_reasoning"
+    )
     assert config.model_roles.roles["coding_optimized_builder"].default_service_tier == "flex"
     # frontier_coding_reviewer intentionally stays on codex: manual-override-only,
     # never auto-routed.
@@ -59,38 +62,32 @@ def test_default_openai_pricing_includes_source_metadata() -> None:
 
     nano_flex = config.pricing.roles["mechanical_worker:flex"]
     assert nano_flex.provider == "openai"
-    assert nano_flex.model == "gpt-5.4-nano"
+    assert nano_flex.model == "gpt-5-nano"
     assert nano_flex.service_tier == "flex"
-    assert nano_flex.input_usd_per_1m_tokens == 0.10
-    assert nano_flex.cached_input_usd_per_1m_tokens == 0.01
-    assert nano_flex.output_usd_per_1m_tokens == 0.625
+    assert nano_flex.input_usd_per_1m_tokens == 0.025
+    assert nano_flex.cached_input_usd_per_1m_tokens == 0.0025
+    assert nano_flex.output_usd_per_1m_tokens == 0.2
     assert nano_flex.source_url == "https://developers.openai.com/api/docs/pricing"
     assert nano_flex.retrieved_or_verified_date == "2026-05-11"
 
-    mini_default = config.pricing.roles["general_builder:default"]
-    assert mini_default.model == "gpt-5.4-mini"
-    assert mini_default.input_usd_per_1m_tokens == 0.75
-    assert mini_default.output_usd_per_1m_tokens == 4.5
+    mini_flex = config.pricing.roles["general_builder:flex"]
+    assert mini_flex.model == "gpt-5-mini"
+    assert mini_flex.input_usd_per_1m_tokens == 0.125
+    assert mini_flex.output_usd_per_1m_tokens == 1.0
 
-    reviewer_priority = config.pricing.roles["frontier_reviewer:priority"]
-    assert reviewer_priority.model == "gpt-5.5"
-    assert reviewer_priority.service_tier == "priority"
-    assert reviewer_priority.input_usd_per_1m_tokens == 12.5
-    assert reviewer_priority.output_usd_per_1m_tokens == 75.0
-    # coding_optimized_builder was retargeted to gpt-5.4-mini (Flex-capable); its
-    # pricing must reflect gpt-5.4-mini's real rates, not gpt-5.3-codex's.
+    reviewer_flex = config.pricing.roles["frontier_reviewer:flex"]
+    assert reviewer_flex.model == "gpt-5"
+    assert reviewer_flex.service_tier == "flex"
+    assert reviewer_flex.input_usd_per_1m_tokens == 0.625
+    assert reviewer_flex.output_usd_per_1m_tokens == 5.0
+    # coding_optimized_builder was retargeted to gpt-5 (Flex-capable); its pricing
+    # must reflect gpt-5's real rates, not gpt-5.3-codex's.
     coding_flex = config.pricing.roles["coding_optimized_builder:flex"]
-    assert coding_flex.model == "gpt-5.4-mini"
+    assert coding_flex.model == "gpt-5"
     assert coding_flex.service_tier == "flex"
-    assert config.pricing.roles["coding_optimized_builder:default"].model == "gpt-5.4-mini"
     assert (
-        config.pricing.roles["coding_optimized_builder:priority"].output_usd_per_1m_tokens == 9.0
-    )
-    assert (
-        config.pricing.roles[
-            "emergency_pro_reviewer:default"
-        ].cached_input_usd_per_1m_tokens
-        is None
+        config.pricing.roles["emergency_pro_reviewer:flex"].cached_input_usd_per_1m_tokens
+        == 0.0625
     )
 
 
@@ -134,20 +131,15 @@ def test_load_config_parses_custom_model_role(tmp_path: Path) -> None:
 schema_version: 3
 model_aliases:
   openai_classifier_nano: gpt-5-nano
-  openai_nano: gpt-5.4-nano
   openai_mini_legacy: gpt-5-mini
-  openai_mini: gpt-5.4-mini
   openai_codex: gpt-5.3-codex
-  openai_frontier_balanced: gpt-5.4
-  openai_frontier: gpt-5.5
-  openai_frontier_pro: gpt-5.5-pro
   openai_legacy_reasoning: gpt-5
   openai_non_reasoning: gpt-4.1
 model_roles:
   roles:
     mechanical_worker:
       provider: openai
-      model_alias: openai_nano
+      model_alias: openai_classifier_nano
       purpose: classify and summarize
       max_input_tokens: 4000
       max_output_tokens: 500
@@ -164,11 +156,11 @@ pricing:
   roles:
     "mechanical_worker:flex":
       provider: openai
-      model: gpt-5.4-nano
+      model: gpt-5-nano
       service_tier: flex
-      input_usd_per_1m_tokens: 0.2
-      cached_input_usd_per_1m_tokens: 0.02
-      output_usd_per_1m_tokens: 1.25
+      input_usd_per_1m_tokens: 0.025
+      cached_input_usd_per_1m_tokens: 0.0025
+      output_usd_per_1m_tokens: 0.2
       max_output_tokens: 500
       budget_pool: worker
       source_url: https://developers.openai.com/api/docs/pricing
@@ -180,12 +172,14 @@ pricing:
     config = load_config(config_path)
 
     role = config.model_roles.roles["mechanical_worker"]
-    assert role.model_alias == "openai_nano"
+    assert role.model_alias == "openai_classifier_nano"
     assert role.reasoning_effort == "low"
     assert role.default_service_tier == "flex"
     assert role.fallback_service_tier is None
     assert role.max_attempts == 1
-    assert config.pricing.roles["mechanical_worker:flex"].cached_input_usd_per_1m_tokens == 0.02
+    assert (
+        config.pricing.roles["mechanical_worker:flex"].cached_input_usd_per_1m_tokens == 0.0025
+    )
 
 
 def test_load_config_normalizes_legacy_classifier_names(tmp_path: Path) -> None:
@@ -252,13 +246,13 @@ def test_resolve_model_role_uses_aliases_and_frontier_patch_policy() -> None:
 
     assert general.role_name == "general_builder"
     assert general.provider == "openai"
-    assert general.model == "gpt-5.4-mini"
+    assert general.model == "gpt-5-mini"
     assert general.service_tier == "default"
-    assert general.reasoning_effort == "low"
+    assert general.reasoning_effort == "medium"
     assert general.allow_direct_patch is True
 
     reviewer = resolve_model_role(config, "frontier_reviewer")
-    assert reviewer.model == "gpt-5.5"
+    assert reviewer.model == "gpt-5"
     assert reviewer.service_tier == "flex"
     assert reviewer.allow_direct_patch is False
 
@@ -290,7 +284,7 @@ def test_fake_provider_returns_structured_builder_output() -> None:
     response = provider.generate(ProviderRequest(role=role, prompt="make a tiny change"))
 
     assert response.provider == "openai"
-    assert response.model == "gpt-5.4-nano"
+    assert response.model == "gpt-5-nano"
     assert response.service_tier == "flex"
     assert response.structured_output == output
     assert response.confidence == 0.9
@@ -310,13 +304,13 @@ def test_openai_provider_requires_env_api_key(monkeypatch: pytest.MonkeyPatch) -
 
 def test_codex_role_uses_request_level_reasoning_effort() -> None:
     config = AppConfig()
-    # coding_optimized_builder was retargeted to gpt-5.4-mini because gpt-5.3-codex
-    # does not support Flex; frontier_coding_reviewer intentionally stays on codex
-    # since it's manual-override-only and never auto-routed.
+    # coding_optimized_builder was retargeted to gpt-5 because gpt-5.3-codex does
+    # not support Flex; frontier_coding_reviewer intentionally stays on codex since
+    # it's manual-override-only and never auto-routed.
     role = resolve_model_role(config, "coding_optimized_builder")
     reviewer_role = resolve_model_role(config, "frontier_coding_reviewer")
 
-    assert role.model == "gpt-5.4-mini"
+    assert role.model == "gpt-5"
     assert role.service_tier == "flex"
     assert role.reasoning_effort == "medium"
     assert reviewer_role.model == "gpt-5.3-codex"
@@ -327,16 +321,85 @@ def test_frontier_pro_requires_manual_approval_and_priority_disabled() -> None:
     config = AppConfig()
     emergency = config.model_roles.roles["emergency_pro_reviewer"]
 
-    assert emergency.model_alias == "openai_frontier_pro"
+    assert emergency.model_alias == "openai_legacy_reasoning"
     assert emergency.manual_approval_required
     assert emergency.fallback_service_tier is None
 
 
 def test_cached_input_none_is_distinct_from_zero() -> None:
     config = AppConfig()
-    pro_default = config.pricing.roles["emergency_pro_reviewer:default"]
-    nano_default = config.pricing.roles["mechanical_worker:default"]
+    nano_flex = config.pricing.roles["mechanical_worker:flex"]
+    assert nano_flex.cached_input_usd_per_1m_tokens is not None
+    assert nano_flex.cached_input_usd_per_1m_tokens > 0.0
 
-    assert pro_default.cached_input_usd_per_1m_tokens is None
-    assert nano_default.cached_input_usd_per_1m_tokens is not None
-    assert nano_default.cached_input_usd_per_1m_tokens > 0.0
+    undocumented = ModelPricing(
+        provider="openai",
+        model="gpt-5",
+        service_tier="flex",
+        input_usd_per_1m_tokens=0.625,
+        cached_input_usd_per_1m_tokens=None,
+        output_usd_per_1m_tokens=5.0,
+        max_output_tokens=4000,
+        budget_pool="reviewer",
+    )
+    assert undocumented.cached_input_usd_per_1m_tokens is None
+
+
+# Roles simplified 2026-08-07 to the 3-model Flex policy (gpt-5-nano/gpt-5-mini/
+# gpt-5), following a benchmark that showed comparable reliability at lower cost per
+# completed task versus the previous gpt-5.4-nano/gpt-5.4-mini/gpt-5.4/gpt-5.5/
+# gpt-5.5-pro spread -- see docs/OPERATIONAL_HARDENING_CHANGES.md.
+THREE_MODEL_POLICY_ROLES = frozenset(
+    {
+        "mechanical_worker",
+        "classification_worker",
+        "simple_builder",
+        "general_builder",
+        "coding_optimized_builder",
+        "frontier_balanced_reviewer",
+        "frontier_reviewer",
+        "emergency_pro_reviewer",
+    }
+)
+THREE_MODEL_POLICY_MODELS = frozenset({"gpt-5-nano", "gpt-5-mini", "gpt-5"})
+
+
+def test_three_model_policy_roles_only_use_the_three_approved_models() -> None:
+    config = AppConfig()
+    aliases = config.model_aliases.model_dump()
+
+    for role_name in THREE_MODEL_POLICY_ROLES:
+        role = config.model_roles.roles[role_name]
+        model = aliases[role.model_alias]
+        assert model in THREE_MODEL_POLICY_MODELS, (
+            f"{role_name} resolves to {model!r}, not one of the three approved "
+            f"models {sorted(THREE_MODEL_POLICY_MODELS)}"
+        )
+        pricing = config.pricing.roles[f"{role_name}:flex"]
+        assert pricing.model in THREE_MODEL_POLICY_MODELS
+
+
+def test_three_model_policy_removed_now_unused_aliases() -> None:
+    # openai_nano (gpt-5.4-nano), openai_mini (gpt-5.4-mini), openai_frontier_balanced
+    # (gpt-5.4), openai_frontier (gpt-5.5), and openai_frontier_pro (gpt-5.5-pro)
+    # became unreferenced once every role above was retargeted -- they were removed
+    # from ModelAliasSettings entirely rather than left as dead config surface.
+    alias_fields = set(ModelAliasSettings.model_fields)
+    for removed in (
+        "openai_nano",
+        "openai_mini",
+        "openai_frontier_balanced",
+        "openai_frontier",
+        "openai_frontier_pro",
+    ):
+        assert removed not in alias_fields
+
+
+def test_classification_worker_reasoning_effort_is_not_none() -> None:
+    # Regression guard: reasoning_effort="none" is REJECTED by the live API for
+    # every gpt-5-family model (live-verified 2026-08-07, "Unsupported value: 'none'
+    # is not supported ... Supported values are: 'minimal', 'low', 'medium', and
+    # 'high'"). classification_worker previously shipped with "none" and could never
+    # have made a successful live call.
+    config = AppConfig()
+    assert config.model_roles.roles["classification_worker"].reasoning_effort != "none"

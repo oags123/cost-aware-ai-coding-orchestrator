@@ -866,6 +866,10 @@ class WorkflowEngine:
             model_role=self.config.diagnosis.model_role,
             context=prompt,
             model_override=self.config.diagnosis.model,
+            # Every live-callable role only ever has a ":flex" pricing entry under
+            # the strict Flex-only policy (no ":default" fallback entry exists) --
+            # estimate against that explicitly rather than relying on tier-fallback.
+            inference_tier="flex",
             max_output_tokens_override=self.config.diagnosis.max_output_tokens,
         )
         state.tool_results["diagnosis_budget_estimate"] = estimate.model_dump()

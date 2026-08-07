@@ -79,7 +79,7 @@ Two models were live-verified (2026-08-07, real OpenAI API) to reject
 
 - **`gpt-5.3-codex`** -- rejected with `"Flex is not available for this model."`
   `coding_optimized_builder`, which previously used codex, was retargeted to
-  `gpt-5.4-mini` (Flex-capable) so it stays live-callable. `frontier_coding_reviewer`
+  `gpt-5` (Flex-capable) so it stays live-callable. `frontier_coding_reviewer`
   intentionally keeps codex for its coding-specialized review quality but is
   `live_calls_disabled=True` -- analysis/configuration-only, can never make a real
   call, and there is no override to force it to.
@@ -88,6 +88,26 @@ Two models were live-verified (2026-08-07, real OpenAI API) to reject
   for its non-reasoning behavior, with no equivalent Flex-capable substitute) but is
   likewise `live_calls_disabled=True`.
 
-Every other model in the registry (`gpt-5.4-nano`, `gpt-5-nano`, `gpt-5.4-mini`,
-`gpt-5.4`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5`, `gpt-5-mini`) was live-verified
-Flex-capable and every role using them defaults to `flex`.
+Every other model in the registry (`gpt-5-nano`, `gpt-5-mini`, `gpt-5`) was
+live-verified Flex-capable and every role using them defaults to `flex`.
+
+### Three-model simplification (2026-08-07)
+
+Automatic and reviewer routing was simplified to exactly three Flex-capable models
+-- `gpt-5-nano`, `gpt-5-mini`, and `gpt-5` -- replacing the previous
+`gpt-5.4-nano`/`gpt-5.4-mini`/`gpt-5.4`/`gpt-5.5`/`gpt-5.5-pro` spread, following a
+benchmark showing comparable reliability at a lower cost per completed task. The
+primary metric was **actual cost per successfully completed task, not price per
+token**: across 7 representative scenarios (classification, explain-code, one-file
+and two-file bug fixes, a multi-bug patch, and a forced-failure/rollback case), both
+model sets reached 4/6 first-attempt success on the real (non-forced-failure)
+scenarios, sharing the one failure (an LLM hunk-header line-count mismatch,
+independent of model choice), while the new 3-model set cost roughly 2.3x less per
+success ($0.000094 vs $0.0002148). Total benchmark spend was ~$0.0033 against a
+$0.05 cap. See [Operational Hardening Changes](OPERATIONAL_HARDENING_CHANGES.md) for
+the full numbers.
+
+The same benchmark also found that `reasoning_effort="none"` (`classification_worker`'s
+previous value) is rejected by the real API for every gpt-5-family model tested --
+only `minimal`/`low`/`medium`/`high` are accepted server-side. `classification_worker`
+now uses `low`.

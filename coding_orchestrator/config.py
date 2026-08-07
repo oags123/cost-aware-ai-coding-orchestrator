@@ -178,23 +178,18 @@ class ModelPricing(BaseModel):
 class PricingSettings(BaseModel):
     roles: dict[str, ModelPricing] = Field(
         default_factory=lambda: {
+            # Simplified 2026-08-07 to the 3-model policy: retargeted from
+            # gpt-5.4-nano to gpt-5-nano (same rates as classification_worker:flex,
+            # same underlying model) -- see docs/OPERATIONAL_HARDENING_CHANGES.md.
+            # The :default entry was dropped along with gpt-5.4-nano since this role
+            # can only ever run on Flex.
             "mechanical_worker:flex": ModelPricing(
                 provider="openai",
-                model="gpt-5.4-nano",
+                model="gpt-5-nano",
                 service_tier="flex",
-                input_usd_per_1m_tokens=0.10,
-                cached_input_usd_per_1m_tokens=0.01,
-                output_usd_per_1m_tokens=0.625,
-                max_output_tokens=1500,
-                budget_pool="worker",
-            ),
-            "mechanical_worker:default": ModelPricing(
-                provider="openai",
-                model="gpt-5.4-nano",
-                service_tier="default",
-                input_usd_per_1m_tokens=0.20,
-                cached_input_usd_per_1m_tokens=0.02,
-                output_usd_per_1m_tokens=1.25,
+                input_usd_per_1m_tokens=0.025,
+                cached_input_usd_per_1m_tokens=0.0025,
+                output_usd_per_1m_tokens=0.2,
                 max_output_tokens=1500,
                 budget_pool="worker",
             ),
@@ -218,88 +213,41 @@ class PricingSettings(BaseModel):
                 max_output_tokens=1000,
                 budget_pool="worker",
             ),
+            # Simplified 2026-08-07 to the 3-model policy: retargeted from
+            # gpt-5.4-mini to gpt-5-mini. :default/:priority entries were dropped
+            # along with gpt-5.4-mini since this role can only ever run on Flex.
             "simple_builder:flex": ModelPricing(
                 provider="openai",
-                model="gpt-5.4-mini",
+                model="gpt-5-mini",
                 service_tier="flex",
-                input_usd_per_1m_tokens=0.375,
-                cached_input_usd_per_1m_tokens=0.0375,
-                output_usd_per_1m_tokens=2.25,
+                input_usd_per_1m_tokens=0.125,
+                cached_input_usd_per_1m_tokens=0.0125,
+                output_usd_per_1m_tokens=1.0,
                 max_output_tokens=3000,
                 budget_pool="builder",
             ),
-            "simple_builder:default": ModelPricing(
-                provider="openai",
-                model="gpt-5.4-mini",
-                service_tier="default",
-                input_usd_per_1m_tokens=0.75,
-                cached_input_usd_per_1m_tokens=0.075,
-                output_usd_per_1m_tokens=4.5,
-                max_output_tokens=3000,
-                budget_pool="builder",
-            ),
+            # Simplified 2026-08-07 to the 3-model policy: retargeted from
+            # gpt-5.4-mini to gpt-5-mini.
             "general_builder:flex": ModelPricing(
                 provider="openai",
-                model="gpt-5.4-mini",
+                model="gpt-5-mini",
                 service_tier="flex",
-                input_usd_per_1m_tokens=0.375,
-                cached_input_usd_per_1m_tokens=0.0375,
-                output_usd_per_1m_tokens=2.25,
+                input_usd_per_1m_tokens=0.125,
+                cached_input_usd_per_1m_tokens=0.0125,
+                output_usd_per_1m_tokens=1.0,
                 max_output_tokens=4000,
                 budget_pool="builder",
             ),
-            "general_builder:default": ModelPricing(
-                provider="openai",
-                model="gpt-5.4-mini",
-                service_tier="default",
-                input_usd_per_1m_tokens=0.75,
-                cached_input_usd_per_1m_tokens=0.075,
-                output_usd_per_1m_tokens=4.5,
-                max_output_tokens=4000,
-                budget_pool="builder",
-            ),
-            "general_builder:priority": ModelPricing(
-                provider="openai",
-                model="gpt-5.4-mini",
-                service_tier="priority",
-                input_usd_per_1m_tokens=1.5,
-                cached_input_usd_per_1m_tokens=0.15,
-                output_usd_per_1m_tokens=9.0,
-                max_output_tokens=4000,
-                budget_pool="builder",
-            ),
-            # coding_optimized_builder was retargeted from gpt-5.3-codex to
-            # gpt-5.4-mini because codex does not support Flex (live-verified
-            # 2026-08-07); pricing below matches gpt-5.4-mini's real per-token rates
-            # (identical to simple_builder/general_builder, same underlying model),
-            # not codex's rates.
+            # coding_optimized_builder was retargeted from gpt-5.3-codex because
+            # codex does not support Flex (live-verified 2026-08-07), and simplified
+            # 2026-08-07 to the 3-model policy: gpt-5.4-mini -> gpt-5.
             "coding_optimized_builder:flex": ModelPricing(
                 provider="openai",
-                model="gpt-5.4-mini",
+                model="gpt-5",
                 service_tier="flex",
-                input_usd_per_1m_tokens=0.375,
-                cached_input_usd_per_1m_tokens=0.0375,
-                output_usd_per_1m_tokens=2.25,
-                max_output_tokens=8000,
-                budget_pool="builder",
-            ),
-            "coding_optimized_builder:default": ModelPricing(
-                provider="openai",
-                model="gpt-5.4-mini",
-                service_tier="default",
-                input_usd_per_1m_tokens=0.75,
-                cached_input_usd_per_1m_tokens=0.075,
-                output_usd_per_1m_tokens=4.5,
-                max_output_tokens=8000,
-                budget_pool="builder",
-            ),
-            "coding_optimized_builder:priority": ModelPricing(
-                provider="openai",
-                model="gpt-5.4-mini",
-                service_tier="priority",
-                input_usd_per_1m_tokens=1.5,
-                cached_input_usd_per_1m_tokens=0.15,
-                output_usd_per_1m_tokens=9.0,
+                input_usd_per_1m_tokens=0.625,
+                cached_input_usd_per_1m_tokens=0.0625,
+                output_usd_per_1m_tokens=5.0,
                 max_output_tokens=8000,
                 budget_pool="builder",
             ),
@@ -323,108 +271,42 @@ class PricingSettings(BaseModel):
                 max_output_tokens=8000,
                 budget_pool="reviewer",
             ),
+            # Simplified 2026-08-07 to the 3-model policy: retargeted from gpt-5.4 to
+            # gpt-5 (reasoning_effort raised to "high"). :default/:priority entries
+            # were dropped along with gpt-5.4 since this role can only ever run on
+            # Flex.
             "frontier_balanced_reviewer:flex": ModelPricing(
                 provider="openai",
-                model="gpt-5.4",
+                model="gpt-5",
                 service_tier="flex",
-                input_usd_per_1m_tokens=1.25,
-                cached_input_usd_per_1m_tokens=0.13,
-                output_usd_per_1m_tokens=7.5,
-                long_context_input_usd_per_1m_tokens=2.5,
-                long_context_cached_input_usd_per_1m_tokens=0.25,
-                long_context_output_usd_per_1m_tokens=11.25,
+                input_usd_per_1m_tokens=0.625,
+                cached_input_usd_per_1m_tokens=0.0625,
+                output_usd_per_1m_tokens=5.0,
                 max_output_tokens=6000,
                 budget_pool="reviewer",
             ),
-            "frontier_balanced_reviewer:default": ModelPricing(
-                provider="openai",
-                model="gpt-5.4",
-                service_tier="default",
-                input_usd_per_1m_tokens=2.5,
-                cached_input_usd_per_1m_tokens=0.25,
-                output_usd_per_1m_tokens=15.0,
-                long_context_input_usd_per_1m_tokens=5.0,
-                long_context_cached_input_usd_per_1m_tokens=0.5,
-                long_context_output_usd_per_1m_tokens=22.5,
-                max_output_tokens=6000,
-                budget_pool="reviewer",
-            ),
-            "frontier_balanced_reviewer:priority": ModelPricing(
-                provider="openai",
-                model="gpt-5.4",
-                service_tier="priority",
-                input_usd_per_1m_tokens=5.0,
-                cached_input_usd_per_1m_tokens=0.5,
-                output_usd_per_1m_tokens=30.0,
-                max_output_tokens=6000,
-                budget_pool="reviewer",
-            ),
+            # Simplified 2026-08-07 to the 3-model policy: retargeted from gpt-5.5 to
+            # gpt-5 (reasoning_effort raised to "high").
             "frontier_reviewer:flex": ModelPricing(
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5",
                 service_tier="flex",
-                input_usd_per_1m_tokens=2.5,
-                cached_input_usd_per_1m_tokens=0.25,
-                output_usd_per_1m_tokens=15.0,
-                long_context_input_usd_per_1m_tokens=5.0,
-                long_context_cached_input_usd_per_1m_tokens=0.5,
-                long_context_output_usd_per_1m_tokens=22.5,
-                max_output_tokens=4000,
+                input_usd_per_1m_tokens=0.625,
+                cached_input_usd_per_1m_tokens=0.0625,
+                output_usd_per_1m_tokens=5.0,
+                max_output_tokens=8000,
                 budget_pool="reviewer",
             ),
-            "frontier_reviewer:default": ModelPricing(
-                provider="openai",
-                model="gpt-5.5",
-                service_tier="default",
-                input_usd_per_1m_tokens=5.0,
-                cached_input_usd_per_1m_tokens=0.5,
-                output_usd_per_1m_tokens=30.0,
-                long_context_input_usd_per_1m_tokens=10.0,
-                long_context_cached_input_usd_per_1m_tokens=1.0,
-                long_context_output_usd_per_1m_tokens=45.0,
-                max_output_tokens=4000,
-                budget_pool="reviewer",
-            ),
-            "frontier_reviewer:priority": ModelPricing(
-                provider="openai",
-                model="gpt-5.5",
-                service_tier="priority",
-                input_usd_per_1m_tokens=12.5,
-                cached_input_usd_per_1m_tokens=1.25,
-                output_usd_per_1m_tokens=75.0,
-                max_output_tokens=4000,
-                budget_pool="reviewer",
-            ),
+            # Simplified 2026-08-07 to the 3-model policy: retargeted from
+            # gpt-5.5-pro to gpt-5 (live-verified with a real Flex generation call,
+            # unlike gpt-5.5-pro which was config-validation-only).
             "emergency_pro_reviewer:flex": ModelPricing(
                 provider="openai",
-                model="gpt-5.5-pro",
+                model="gpt-5",
                 service_tier="flex",
-                input_usd_per_1m_tokens=15.0,
-                cached_input_usd_per_1m_tokens=None,
-                output_usd_per_1m_tokens=90.0,
-                max_output_tokens=8000,
-                budget_pool="emergency",
-            ),
-            "emergency_pro_reviewer:default": ModelPricing(
-                provider="openai",
-                model="gpt-5.5-pro",
-                service_tier="default",
-                input_usd_per_1m_tokens=30.0,
-                cached_input_usd_per_1m_tokens=None,
-                output_usd_per_1m_tokens=180.0,
-                long_context_input_usd_per_1m_tokens=60.0,
-                long_context_cached_input_usd_per_1m_tokens=None,
-                long_context_output_usd_per_1m_tokens=270.0,
-                max_output_tokens=8000,
-                budget_pool="emergency",
-            ),
-            "emergency_pro_reviewer:batch": ModelPricing(
-                provider="openai",
-                model="gpt-5.5-pro",
-                service_tier="batch",
-                input_usd_per_1m_tokens=15.0,
-                cached_input_usd_per_1m_tokens=None,
-                output_usd_per_1m_tokens=90.0,
+                input_usd_per_1m_tokens=0.625,
+                cached_input_usd_per_1m_tokens=0.0625,
+                output_usd_per_1m_tokens=5.0,
                 max_output_tokens=8000,
                 budget_pool="emergency",
             ),
@@ -502,14 +384,14 @@ class ProviderSettings(BaseModel):
 
 
 class ModelAliasSettings(BaseModel):
+    # Simplified 2026-08-07 to the 3-model Flex policy (gpt-5-nano/gpt-5-mini/gpt-5).
+    # openai_nano (gpt-5.4-nano), openai_mini (gpt-5.4-mini), openai_frontier_balanced
+    # (gpt-5.4), openai_frontier (gpt-5.5), and openai_frontier_pro (gpt-5.5-pro) were
+    # removed once every automatic/reviewer role was retargeted off of them -- see
+    # docs/OPERATIONAL_HARDENING_CHANGES.md for the benchmark that justified this.
     openai_classifier_nano: str = "gpt-5-nano"
-    openai_nano: str = "gpt-5.4-nano"
     openai_mini_legacy: str = "gpt-5-mini"
-    openai_mini: str = "gpt-5.4-mini"
     openai_codex: str = "gpt-5.3-codex"
-    openai_frontier_balanced: str = "gpt-5.4"
-    openai_frontier: str = "gpt-5.5"
-    openai_frontier_pro: str = "gpt-5.5-pro"
     openai_legacy_reasoning: str = "gpt-5"
     openai_non_reasoning: str = "gpt-4.1"
 
@@ -564,7 +446,12 @@ class ModelRoleRegistry(BaseModel):
     roles: dict[str, ModelRoleSettings] = Field(
         default_factory=lambda: {
             "mechanical_worker": ModelRoleSettings(
-                model_alias="openai_nano",
+                # Simplified 2026-08-07 to the 3-model policy (gpt-5-nano/mini/gpt-5,
+                # all Flex): a benchmark across 7 representative task scenarios (both
+                # live-API-verified) showed indistinguishable reliability between the
+                # previous gpt-5.4-nano and gpt-5-nano, but gpt-5-nano is materially
+                # cheaper -- see docs/OPERATIONAL_HARDENING_CHANGES.md.
+                model_alias="openai_classifier_nano",
                 purpose="tiny deterministic coding tasks and bounded tiny patches",
                 max_input_tokens=16_000,
                 max_output_tokens=1_500,
@@ -581,7 +468,12 @@ class ModelRoleRegistry(BaseModel):
                 max_input_tokens=12_000,
                 max_output_tokens=1_000,
                 max_context_chars=48_000,
-                reasoning_effort="none",
+                # reasoning_effort="none" was live-verified 2026-08-07 to be REJECTED
+                # by the real API for every gpt-5-family model ("Unsupported value:
+                # 'none' is not supported ... Supported values are: 'minimal', 'low',
+                # 'medium', and 'high'"). "none" could never have made a successful
+                # live call. "low" is the cheapest value the live API actually accepts.
+                reasoning_effort="low",
                 verbosity="low",
                 allow_direct_patch=False,
                 budget_pool="worker",
@@ -589,7 +481,9 @@ class ModelRoleRegistry(BaseModel):
                 fallback_service_tier=None,
             ),
             "simple_builder": ModelRoleSettings(
-                model_alias="openai_mini",
+                # Simplified 2026-08-07 to the 3-model policy -- see mechanical_worker
+                # above and docs/OPERATIONAL_HARDENING_CHANGES.md for the benchmark.
+                model_alias="openai_mini_legacy",
                 purpose="small local Python patches, helpers, and validators",
                 max_input_tokens=32_000,
                 max_output_tokens=3_000,
@@ -601,12 +495,14 @@ class ModelRoleRegistry(BaseModel):
                 fallback_service_tier=None,
             ),
             "general_builder": ModelRoleSettings(
-                model_alias="openai_mini",
+                # Simplified 2026-08-07 to the 3-model policy; reasoning_effort raised
+                # to "medium" per the benchmarked configuration.
+                model_alias="openai_mini_legacy",
                 purpose="normal coding tasks and guided repairs",
                 max_input_tokens=64_000,
                 max_output_tokens=4_000,
                 max_context_chars=256_000,
-                reasoning_effort="low",
+                reasoning_effort="medium",
                 verbosity="medium",
                 budget_pool="builder",
                 default_service_tier="flex",
@@ -615,14 +511,14 @@ class ModelRoleRegistry(BaseModel):
             "coding_optimized_builder": ModelRoleSettings(
                 # gpt-5.3-codex (openai_codex) does NOT support Flex -- live-verified
                 # 2026-08-07: the API rejects service_tier="flex" for this model with
-                # "Flex is not available for this model." Retargeted to gpt-5.4-mini
-                # (openai_mini), which is Flex-capable and already used by
-                # simple_builder/general_builder, so this role stays reachable through
-                # automatic routing under the strict Flex-only policy.
-                model_alias="openai_mini",
+                # "Flex is not available for this model." Simplified 2026-08-07 to the
+                # 3-model policy: retargeted to gpt-5 (openai_legacy_reasoning), which
+                # is Flex-capable, so this role stays reachable through automatic
+                # routing under the strict Flex-only policy.
+                model_alias="openai_legacy_reasoning",
                 purpose=(
                     "coding-optimized patch generation; retargeted from gpt-5.3-codex "
-                    "to gpt-5.4-mini because codex does not support Flex"
+                    "to gpt-5 because codex does not support Flex"
                 ),
                 max_input_tokens=64_000,
                 max_output_tokens=8_000,
@@ -659,13 +555,15 @@ class ModelRoleRegistry(BaseModel):
                 live_calls_disabled=True,
             ),
             "frontier_balanced_reviewer": ModelRoleSettings(
-                # gpt-5.4 live-verified Flex-capable 2026-08-07.
-                model_alias="openai_frontier_balanced",
+                # Simplified 2026-08-07 to the 3-model policy: retargeted from gpt-5.4
+                # to gpt-5 (openai_legacy_reasoning), reasoning_effort raised to
+                # "high" -- both live-verified Flex-capable/accepted 2026-08-07.
+                model_alias="openai_legacy_reasoning",
                 purpose="cost-conscious architecture-lite and large context review",
                 max_input_tokens=256_000,
                 max_output_tokens=6_000,
                 max_context_chars=1_000_000,
-                reasoning_effort="medium",
+                reasoning_effort="high",
                 verbosity="medium",
                 allow_direct_patch=False,
                 budget_pool="reviewer",
@@ -674,13 +572,15 @@ class ModelRoleRegistry(BaseModel):
                 max_attempts=1,
             ),
             "frontier_reviewer": ModelRoleSettings(
-                # gpt-5.5 live-verified Flex-capable 2026-08-07.
-                model_alias="openai_frontier",
+                # Simplified 2026-08-07 to the 3-model policy: retargeted from gpt-5.5
+                # to gpt-5 (openai_legacy_reasoning), reasoning_effort raised to
+                # "high" -- both live-verified Flex-capable/accepted 2026-08-07.
+                model_alias="openai_legacy_reasoning",
                 purpose="architecture, planning, difficult diagnosis, and review",
                 max_input_tokens=256_000,
                 max_output_tokens=8_000,
                 max_context_chars=1_000_000,
-                reasoning_effort="medium",
+                reasoning_effort="high",
                 verbosity="medium",
                 allow_direct_patch=False,
                 budget_pool="reviewer",
@@ -689,10 +589,12 @@ class ModelRoleRegistry(BaseModel):
                 max_attempts=1,
             ),
             "emergency_pro_reviewer": ModelRoleSettings(
-                # gpt-5.5-pro: Flex pricing verified/documented (config validation
-                # only -- no live generation call was made for this model, per the
-                # cost policy for expensive emergency roles).
-                model_alias="openai_frontier_pro",
+                # Simplified 2026-08-07 to the 3-model policy: retargeted from
+                # gpt-5.5-pro to gpt-5 (openai_legacy_reasoning) -- live-verified Flex
+                # generation call succeeded 2026-08-07 (gpt-5.5-pro was config-
+                # validation-only, per the cost policy for expensive emergency roles;
+                # gpt-5 is cheaper and was live-verified directly).
+                model_alias="openai_legacy_reasoning",
                 purpose="manual approval only final adjudication for hard blockers",
                 max_input_tokens=128_000,
                 max_output_tokens=8_000,

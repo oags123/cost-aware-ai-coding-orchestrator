@@ -5,6 +5,136 @@ tests" to genuinely operational and safe for real-world use. It follows on from 
 pre-release audit that found the engineering quality was solid (tests/lint/type-check all
 green) but several load-bearing safety and correctness invariants were violated by default.
 
+## Three-model simplification for automatic/reviewer routing (2026-08-07)
+
+Automatic and reviewer routing was evaluated for simplification to exactly three
+Flex-capable OpenAI models -- `gpt-5-nano`, `gpt-5-mini`, and `gpt-5` -- replacing
+the previous 5-model spread (`gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`,
+`gpt-5.5-pro`). The evaluation did not touch production configuration until the
+benchmark below justified it; per the decision rule, the simplified configuration
+was adopted because it showed comparable reliability and a lower cost per
+successfully completed task.
+
+**Compatibility (live-verified against the real API, 2026-08-07):**
+
+- All three models (`gpt-5-nano`, `gpt-5-mini`, `gpt-5`) are available and accept
+  Flex.
+- Reasoning efforts `low`/`medium`/`high` are accepted by all three models.
+- **`reasoning_effort="none"` is rejected by the live API for every gpt-5-family
+  model tested** ("Unsupported value: 'none' is not supported with the '<model>'
+  model. Supported values are: 'minimal', 'low', 'medium', and 'high'."). This
+  codebase's `ReasoningEffort` type does not currently model `minimal`.
+  `classification_worker` previously shipped with `reasoning_effort="none"` and
+  could never have made a successful live call -- this was a pre-existing
+  production defect, found and fixed as part of this evaluation regardless of the
+  A/B benchmark outcome. It now uses `low`, the cheapest value the live API accepts.
+
+**Benchmark methodology:** two isolated `AppConfig` objects were built without
+touching the committed configuration -- Configuration A (the then-current production
+assignments) and Configuration B (the proposed 3-model assignments) -- sharing a
+single budget ledger and project id so the engine's own `BudgetGuard` enforced a
+hard, self-policing cumulative cap across the whole benchmark. 7 representative task
+scenarios were run against fresh temporary git repositories under both
+configurations where practical:
+
+1. Classification-only (direct role probe -- `classification_worker` is not
+   currently reachable via `WorkflowEngine`'s automatic routing, only
+   `mechanical_worker`/`simple_builder`/`general_builder` are, so this scenario
+   calls the provider directly through the same budget-guard boundary the engine
+   uses).
+2. Explain-code (non-modifying workflow).
+3. One-file bug fix.
+4. Small test-writing task.
+5. Two-file bug fix.
+6. A moderately difficult two-independent-bug patch (`general_builder`).
+7. A controlled, deterministic validation failure to verify rollback correctness
+   identically under both configurations.
+
+**Results (primary metric: actual cost per successfully completed task, not price
+per token):**
+
+| Scenario | Role | Config A model | A result | Config B model | B result |
+| --- | --- | --- | --- | --- | --- |
+| 1. classification | `classification_worker` | `gpt-5-nano` | completed | `gpt-5-nano` | completed |
+| 2. explain-code | `mechanical_worker` | `gpt-5.4-nano` | completed | `gpt-5-nano` | completed |
+| 4. write-tests | `mechanical_worker` | `gpt-5.4-nano` | **failed** (hunk-header line-count mismatch) | `gpt-5-nano` | completed |
+| 3. one-file bugfix | `simple_builder` | `gpt-5.4-mini` | completed | `gpt-5-mini` | completed |
+| 5. two-file bugfix | `simple_builder` | `gpt-5.4-mini` | completed | `gpt-5-mini` | **failed** (patch context mismatch) |
+| 6. multi-bug patch | `general_builder` | `gpt-5.4-mini` | blocked (hunk-header undercount, partial apply) | `gpt-5-mini` | blocked (hunk-header undercount) |
+| 7. forced failure/rollback | `simple_builder` | `gpt-5.4-mini` | blocked, correctly rolled back | `gpt-5-mini` | blocked, correctly rolled back |
+
+- **First-attempt success rate** on the 6 real (non-forced-failure) scenarios:
+  **4/6 (67%) for both configurations**, each failing exactly one different
+  scenario for the same underlying reason (an LLM-generated unified-diff hunk
+  header that miscounts its own line span -- not a capability gap between the
+  models). Scenario 6 failed identically for both configurations, confirming this
+  reliability ceiling is a structural risk of the unified-diff output format under
+  this orchestrator, independent of which of the three models is used. Notably,
+  `git apply --check` can pass on a hunk whose declared line count is wrong while
+  `git apply` still only applies part of the hunk -- this is a real risk worth
+  hardening independently of this benchmark (not addressed here, out of scope for a
+  routing-only evaluation).
+- **Rollback correctness**: 100% for both configurations (scenario 7) -- no commit
+  was created and the repository was byte-for-byte unchanged after the forced
+  failure, under both A and B.
+- **Cost per successfully completed task**: Configuration A averaged **$0.0002148**
+  per success (4 successes, $0.000859 total); Configuration B averaged **$0.000094**
+  per success (4 successes, $0.000376 total) -- **roughly 2.3x cheaper**.
+- **Total live API spend for the full benchmark**: **~$0.0033**, against the
+  $0.05 budget cap (never came close to exceeding it).
+
+**Decision**: Configuration B (the 3-model simplification) was adopted for
+production, since it demonstrated reliability comparable to Configuration A (an
+identical 4/6 first-attempt success rate, sharing the same structural failure mode)
+at a materially lower cost per successful task.
+
+**Production changes made:**
+
+- `mechanical_worker`: `gpt-5.4-nano` -> `gpt-5-nano` (reasoning unchanged, `low`).
+- `classification_worker`: model unchanged (`gpt-5-nano`); `reasoning_effort`:
+  `none` -> `low` (defect fix, see compatibility section above).
+- `simple_builder`: `gpt-5.4-mini` -> `gpt-5-mini` (reasoning unchanged, `low`).
+- `general_builder`: `gpt-5.4-mini` -> `gpt-5-mini`; `reasoning_effort`: `low` ->
+  `medium`.
+- `coding_optimized_builder`: `gpt-5.4-mini` -> `gpt-5` (reasoning unchanged,
+  `medium`).
+- `frontier_balanced_reviewer`: `gpt-5.4` -> `gpt-5`; `reasoning_effort`: `medium`
+  -> `high`.
+- `frontier_reviewer`: `gpt-5.5` -> `gpt-5`; `reasoning_effort`: `medium` -> `high`.
+- `emergency_pro_reviewer`: `gpt-5.5-pro` -> `gpt-5` (reasoning unchanged, `high`;
+  `manual_approval_required` unchanged).
+- Removed the now-unreferenced aliases from `ModelAliasSettings`: `openai_nano`
+  (`gpt-5.4-nano`), `openai_mini` (`gpt-5.4-mini`), `openai_frontier_balanced`
+  (`gpt-5.4`), `openai_frontier` (`gpt-5.5`), `openai_frontier_pro` (`gpt-5.5-pro`).
+- Dropped the `:default`/`:priority`/`:batch` pricing entries for the 8 affected
+  roles along with their now-unused models, since every live-enabled role can only
+  ever run on Flex under the existing global policy -- only `:flex` entries remain
+  for these roles.
+- Fixed `WorkflowEngine._run_diagnosis_reviewer` to request `:flex` pricing
+  explicitly (`inference_tier="flex"`) instead of relying on the removed
+  `:default`-suffixed fallback lookup in `BudgetGuard.pricing_for_role` -- this was
+  a genuine regression introduced by dropping the `:default` entries, caught by the
+  existing diagnosis test suite.
+- `legacy_reasoning_fallback` (manual-only, `gpt-5`) and `mini_legacy_fallback`
+  (manual-only, `gpt-5-mini`) were left unchanged -- they already used two of the
+  three approved models and are out of scope for this routing simplification.
+  `frontier_coding_reviewer` (codex, disabled) and
+  `non_reasoning_instruction_follower` (gpt-4.1, disabled) were likewise left
+  unchanged.
+- Added `tests/test_model_roles_config.py::test_three_model_policy_roles_only_use_the_three_approved_models`,
+  `::test_three_model_policy_removed_now_unused_aliases`, and
+  `::test_classification_worker_reasoning_effort_is_not_none` as regression guards.
+- `config.example.yaml` re-synced field-for-field against the Python defaults
+  (verified programmatically, zero mismatches).
+- Full validation: `ruff check .` (all checks passed), `mypy .` (no issues, 63
+  files), `pytest` (132 passed).
+- A final live smoke test against the actual (not benchmark-isolated) production
+  `AppConfig()` confirmed the shipped configuration works end-to-end for a real bug
+  fix: `simple_builder` routed to `gpt-5-mini` on Flex, patch applied, pytest
+  passed, and the commit was created -- $0.000189 additional spend.
+- Total live API spend across this entire evaluation (compatibility checks +
+  benchmark + production smoke test): **~$0.00348**, well under the $0.05 cap.
+
 ## Global strict Flex-only policy (supersedes the manual override below)
 
 A further follow-up closed the one remaining gap in the policy described in the next

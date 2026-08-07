@@ -61,15 +61,26 @@ The CLI's exit code reflects this: `run`/`run-all` exit non-zero unless every ta
 Every role that can make a live call runs on Flex only -- see "Service Tier Policy"
 below for what that means and why.
 
-- `mechanical_worker` -> `gpt-5.4-nano` (`flex`, reasoning `none/low`)
-- `classification_worker` -> `gpt-5-nano` (`flex`, reasoning `none`, no patch)
-- `simple_builder` -> `gpt-5.4-mini` (`flex`, reasoning `low`)
-- `general_builder` -> `gpt-5.4-mini` (`flex`, reasoning `low/medium`)
-- `coding_optimized_builder` -> `gpt-5.4-mini` (`flex`, reasoning `medium`; retargeted
+Automatic and reviewer routing was simplified 2026-08-07 to exactly three
+Flex-capable OpenAI models -- `gpt-5-nano`, `gpt-5-mini`, and `gpt-5` -- after a
+benchmark across 7 representative task scenarios showed comparable reliability at a
+lower cost per completed task than the previous 5-model spread
+(`gpt-5.4-nano`/`gpt-5.4-mini`/`gpt-5.4`/`gpt-5.5`/`gpt-5.5-pro`). See
+[Operational Hardening Changes](docs/OPERATIONAL_HARDENING_CHANGES.md) for the full
+benchmark writeup.
+
+- `mechanical_worker` -> `gpt-5-nano` (`flex`, reasoning `low`)
+- `classification_worker` -> `gpt-5-nano` (`flex`, reasoning `low`, no patch)
+- `simple_builder` -> `gpt-5-mini` (`flex`, reasoning `low`)
+- `general_builder` -> `gpt-5-mini` (`flex`, reasoning `medium`)
+- `coding_optimized_builder` -> `gpt-5` (`flex`, reasoning `medium`; retargeted
   from `gpt-5.3-codex`, which does not support Flex)
-- `frontier_balanced_reviewer` -> `gpt-5.4` (`flex`, diagnosis-first, dry-run only today)
-- `frontier_reviewer` -> `gpt-5.5` (`flex`, diagnosis-first, dry-run only today)
-- `emergency_pro_reviewer` -> `gpt-5.5-pro` (`flex`, manual approval required)
+- `frontier_balanced_reviewer` -> `gpt-5` (`flex`, reasoning `high`, diagnosis-first,
+  dry-run only today)
+- `frontier_reviewer` -> `gpt-5` (`flex`, reasoning `high`, diagnosis-first, dry-run
+  only today)
+- `emergency_pro_reviewer` -> `gpt-5` (`flex`, reasoning `high`, manual approval
+  required)
 - `legacy_reasoning_fallback` -> `gpt-5` (`flex`, manual selection only)
 - `mini_legacy_fallback` -> `gpt-5-mini` (`flex`, manual selection only)
 - `frontier_coding_reviewer` -> `gpt-5.3-codex` -- **disabled for all live calls**
@@ -77,6 +88,12 @@ below for what that means and why.
   analysis/configuration-only
 - `non_reasoning_instruction_follower` -> `gpt-4.1` -- **disabled for all live calls**;
   gpt-4.1 has no Flex support
+
+`reasoning_effort="none"` (previously used by `classification_worker`) was
+live-verified 2026-08-07 to be rejected by the real API for every gpt-5-family model
+("Unsupported value: 'none' is not supported ... Supported values are: 'minimal',
+'low', 'medium', and 'high'."); `classification_worker` now uses `low`, the cheapest
+value the live API actually accepts.
 
 `mechanical_worker` remains the active routed nano role for tiny deterministic coding and bounded patches. `classification_worker` is a canonical role for classification and summarization workloads, but is currently manual/reserved unless selected explicitly by config or policy.
 
@@ -136,7 +153,7 @@ success -- no output is applied, the repository is rolled back, and the task is
 `blocked` with the discrepancy recorded.
 
 `gpt-5.3-codex` and `gpt-4.1` do not support Flex (both live-verified against the real
-API). `coding_optimized_builder` (previously codex) was retargeted to `gpt-5.4-mini`.
+API). `coding_optimized_builder` (previously codex) was retargeted to `gpt-5`.
 `frontier_coding_reviewer` (codex) and `non_reasoning_instruction_follower` (gpt-4.1)
 are `live_calls_disabled: true` -- analysis/configuration-only, can never make a real
 call, with no override to change that.
