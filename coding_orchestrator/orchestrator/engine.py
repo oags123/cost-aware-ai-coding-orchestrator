@@ -620,7 +620,7 @@ class WorkflowEngine:
                 task.allowed_files,
                 self.config.validation,
             ).validate(),
-            SyntaxValidator(self.repo_path, timeout).validate(),
+            SyntaxValidator(changed, self.repo_path, timeout).validate(),
             TestValidator(commands, self.repo_path, timeout).validate(),
         ]
 

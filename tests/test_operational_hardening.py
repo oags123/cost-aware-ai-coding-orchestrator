@@ -32,7 +32,8 @@ from coding_orchestrator.models.provider import (
 )
 from coding_orchestrator.orchestrator.budget import BudgetEstimate, BudgetLedger
 from coding_orchestrator.orchestrator.engine import WorkflowEngine
-from coding_orchestrator.schemas import TaskSpec, ValidationResult
+from coding_orchestrator.orchestrator.workflows import WORKFLOWS
+from coding_orchestrator.schemas import OrchestratorState, TaskSpec, ValidationResult
 from coding_orchestrator.tools.git import GitManager, HeadChangedError
 from coding_orchestrator.tools.lock import ConcurrentExecutionError, RepoLock
 from coding_orchestrator.tools.patch import (
@@ -112,6 +113,82 @@ def test_no_op_builder_response_reports_no_change_not_completed(
     state = engine.run_task(task)
 
     assert state.final_status == "no_change"
+
+
+def test_modifying_workflow_prompt_specifies_exact_diff_format_and_forbids_apply_patch() -> None:
+    # Regression test: a live OpenAI call (gpt-5.4-nano) correctly identified a fix but
+    # emitted it in the "apply_patch" tool-call format (*** Begin Patch / *** Update
+    # File: / *** End Patch) instead of a unified diff, because the prompt never said
+    # which format was required or ruled the other one out -- crashing the task with
+    # PatchContractError. The prompt must be explicit and unambiguous about this.
+    state = OrchestratorState(request_id="r", user_request="fix", complexity="simple")
+    context = WORKFLOWS["fix_bug"].build_context(
+        TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]), state
+    )
+
+    assert "diff --git a/" in context
+    assert "apply_patch" in context.lower()
+    assert "do not" in context.lower()
+
+
+def test_modifying_workflow_context_includes_actual_current_file_contents(
+    tmp_path: Path,
+) -> None:
+    # Regression test: a live OpenAI call produced a diff whose context/removed lines
+    # didn't match the real file (it guessed "def add(a, b):" when the file actually
+    # read "def add(a: int, b: int) -> int:"), because the prompt never included the
+    # file's actual content -- the model was patching blind. git apply --check then
+    # failed. The builder context must include the real current content of every
+    # allowed file so the model can produce a diff that actually applies.
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "def add(a: int, b: int) -> int:\n    return a - b\n")
+    state = OrchestratorState(
+        request_id="r", user_request="fix", complexity="simple", repo_path=str(tmp_path)
+    )
+
+    context = WORKFLOWS["fix_bug"].build_context(
+        TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]), state
+    )
+
+    assert "def add(a: int, b: int) -> int:" in context
+    assert "return a - b" in context
+
+
+def test_context_file_reading_stays_within_workspace(tmp_path: Path) -> None:
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "safe content\n")
+    outside = tmp_path.parent / "outside_secret.txt"
+    outside.write_text("must never be read into a prompt\n", encoding="utf-8")
+    state = OrchestratorState(
+        request_id="r", user_request="fix", complexity="simple", repo_path=str(tmp_path)
+    )
+
+    context = WORKFLOWS["fix_bug"].build_context(
+        TaskSpec(id="T-1", title="Fix bug", allowed_files=["../outside_secret.txt"]), state
+    )
+
+    assert "must never be read into a prompt" not in context
+    outside.unlink()
+
+
+def test_syntax_validator_checks_actual_changed_files_not_own_package(tmp_path: Path) -> None:
+    # Regression test: SyntaxValidator used to hardcode `compileall coding_orchestrator`,
+    # which is meaningless for any target repo that isn't this project itself -- a live
+    # run against a real external scratch repo showed it silently "passing" while
+    # actually failing to find any such directory and checking nothing. It must
+    # compile-check the files the task actually changed.
+    from coding_orchestrator.validators.code_validator import SyntaxValidator
+
+    (tmp_path / "broken.py").write_text("def f(:\n    pass\n", encoding="utf-8")  # syntax error
+    (tmp_path / "fine.py").write_text("def f():\n    pass\n", encoding="utf-8")
+
+    broken_result = SyntaxValidator(["broken.py"], tmp_path, 30).validate()
+    fine_result = SyntaxValidator(["fine.py"], tmp_path, 30).validate()
+    no_python_result = SyntaxValidator(["README.md"], tmp_path, 30).validate()
+
+    assert broken_result.passed is False
+    assert fine_result.passed is True
+    assert no_python_result.passed is True
 
 
 def test_disabled_workflow_requires_human_approval(tmp_path: Path) -> None:
