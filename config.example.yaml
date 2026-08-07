@@ -125,13 +125,14 @@ model_roles:
       max_attempts: 2
       manual_approval_required: false
     frontier_coding_reviewer:
-      # gpt-5.3-codex does NOT support Flex (live-verified 2026-08-07). Kept on
-      # codex intentionally for its coding-specialized review quality, but this role
-      # is NEVER reachable through automatic routing and requires an explicit
-      # --allow-non-flex-tier manual override if ever invoked for real.
+      # gpt-5.3-codex does NOT support Flex (live-verified 2026-08-07: rejected with
+      # "Flex is not available for this model."). Kept on codex intentionally for
+      # its coding-specialized review quality, but live_calls_disabled=true means
+      # this role can NEVER make a real API call -- analysis/configuration-only.
+      # There is no override that can change this.
       provider: openai
       model_alias: openai_codex
-      purpose: difficult coding diagnosis (manual-override-only, no Flex support)
+      purpose: difficult coding diagnosis (disabled for all live calls, no Flex support)
       max_input_tokens: 128000
       max_output_tokens: 8000
       max_context_chars: 400000
@@ -145,7 +146,9 @@ model_roles:
       fallback_service_tier: null
       max_attempts: 1
       manual_approval_required: false
+      live_calls_disabled: true
     frontier_balanced_reviewer:
+      # gpt-5.4 live-verified Flex-capable 2026-08-07.
       provider: openai
       model_alias: openai_frontier_balanced
       purpose: architecture-lite and large-context review
@@ -158,11 +161,12 @@ model_roles:
       allow_tools: false
       allow_direct_patch: false
       budget_pool: reviewer
-      default_service_tier: default
+      default_service_tier: flex
       fallback_service_tier: null
       max_attempts: 1
       manual_approval_required: false
     frontier_reviewer:
+      # gpt-5.5 live-verified Flex-capable 2026-08-07.
       provider: openai
       model_alias: openai_frontier
       purpose: architecture and difficult diagnosis
@@ -175,11 +179,14 @@ model_roles:
       allow_tools: false
       allow_direct_patch: false
       budget_pool: reviewer
-      default_service_tier: default
+      default_service_tier: flex
       fallback_service_tier: null
       max_attempts: 1
       manual_approval_required: false
     emergency_pro_reviewer:
+      # gpt-5.5-pro: Flex pricing verified/documented (config validation only -- no
+      # live generation call was made for this model, per the cost policy for
+      # expensive emergency roles).
       provider: openai
       model_alias: openai_frontier_pro
       purpose: manual-approval final adjudication
@@ -192,13 +199,14 @@ model_roles:
       allow_tools: false
       allow_direct_patch: false
       budget_pool: emergency
-      # Manual-approval-gated (never auto-routed) -- exempt from the automatic
-      # Flex-only policy, but still no automatic tier fallback.
-      default_service_tier: default
+      # Manual-approval-gated (never auto-routed) but still Flex -- the global
+      # "no paid request may ever use a non-Flex tier" policy has no exceptions.
+      default_service_tier: flex
       fallback_service_tier: null
       max_attempts: 1
       manual_approval_required: true
     legacy_reasoning_fallback:
+      # gpt-5 live-verified Flex-capable 2026-08-07.
       provider: openai
       model_alias: openai_legacy_reasoning
       purpose: compatibility fallback only
@@ -211,11 +219,12 @@ model_roles:
       allow_tools: false
       allow_direct_patch: true
       budget_pool: builder
-      default_service_tier: default
+      default_service_tier: flex
       fallback_service_tier: null
       max_attempts: 2
       manual_approval_required: false
     mini_legacy_fallback:
+      # gpt-5-mini live-verified Flex-capable 2026-08-07.
       provider: openai
       model_alias: openai_mini_legacy
       purpose: compatibility fallback only
@@ -228,14 +237,18 @@ model_roles:
       allow_tools: false
       allow_direct_patch: false
       budget_pool: builder
-      default_service_tier: default
+      default_service_tier: flex
       fallback_service_tier: null
       max_attempts: 2
       manual_approval_required: false
     non_reasoning_instruction_follower:
+      # gpt-4.1 does NOT support Flex -- live-verified 2026-08-07: rejected with
+      # "Invalid service_tier argument". No Flex-capable equivalent exists for this
+      # role's specific non-reasoning behavior, so live_calls_disabled=true rather
+      # than retargeting -- analysis/configuration-only, no override possible.
       provider: openai
       model_alias: openai_non_reasoning
-      purpose: deterministic instruction-following fallback
+      purpose: deterministic instruction-following fallback (disabled, no Flex support)
       max_input_tokens: 64000
       max_output_tokens: 4000
       max_context_chars: 256000
@@ -249,6 +262,7 @@ model_roles:
       fallback_service_tier: null
       max_attempts: 2
       manual_approval_required: false
+      live_calls_disabled: true
 
 policies:
   allow_frontier_direct_patch: false
@@ -575,5 +589,163 @@ pricing:
       output_usd_per_1m_tokens: 75.00
       max_output_tokens: 4000
       budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    # frontier_coding_reviewer: gpt-5.3-codex, live_calls_disabled=true (no Flex
+    # support) -- pricing kept for analysis/cost-estimation reference only.
+    "frontier_coding_reviewer:default":
+      provider: openai
+      model: gpt-5.3-codex
+      service_tier: default
+      input_usd_per_1m_tokens: 1.75
+      cached_input_usd_per_1m_tokens: 0.175
+      output_usd_per_1m_tokens: 14.00
+      max_output_tokens: 8000
+      budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "frontier_coding_reviewer:priority":
+      provider: openai
+      model: gpt-5.3-codex
+      service_tier: priority
+      input_usd_per_1m_tokens: 3.50
+      cached_input_usd_per_1m_tokens: 0.35
+      output_usd_per_1m_tokens: 28.00
+      max_output_tokens: 8000
+      budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    # frontier_balanced_reviewer: gpt-5.4, live-verified Flex-capable 2026-08-07.
+    "frontier_balanced_reviewer:flex":
+      provider: openai
+      model: gpt-5.4
+      service_tier: flex
+      input_usd_per_1m_tokens: 1.25
+      cached_input_usd_per_1m_tokens: 0.13
+      output_usd_per_1m_tokens: 7.50
+      long_context_input_usd_per_1m_tokens: 2.50
+      long_context_cached_input_usd_per_1m_tokens: 0.25
+      long_context_output_usd_per_1m_tokens: 11.25
+      max_output_tokens: 6000
+      budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "frontier_balanced_reviewer:default":
+      provider: openai
+      model: gpt-5.4
+      service_tier: default
+      input_usd_per_1m_tokens: 2.50
+      cached_input_usd_per_1m_tokens: 0.25
+      output_usd_per_1m_tokens: 15.00
+      long_context_input_usd_per_1m_tokens: 5.00
+      long_context_cached_input_usd_per_1m_tokens: 0.50
+      long_context_output_usd_per_1m_tokens: 22.50
+      max_output_tokens: 6000
+      budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "frontier_balanced_reviewer:priority":
+      provider: openai
+      model: gpt-5.4
+      service_tier: priority
+      input_usd_per_1m_tokens: 5.00
+      cached_input_usd_per_1m_tokens: 0.50
+      output_usd_per_1m_tokens: 30.00
+      max_output_tokens: 6000
+      budget_pool: reviewer
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    # emergency_pro_reviewer: gpt-5.5-pro. Pricing verified/documented only -- no
+    # live generation call was made for this model (cost policy exception for
+    # expensive emergency-only roles).
+    "emergency_pro_reviewer:flex":
+      provider: openai
+      model: gpt-5.5-pro
+      service_tier: flex
+      input_usd_per_1m_tokens: 15.00
+      output_usd_per_1m_tokens: 90.00
+      max_output_tokens: 8000
+      budget_pool: emergency
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "emergency_pro_reviewer:default":
+      provider: openai
+      model: gpt-5.5-pro
+      service_tier: default
+      input_usd_per_1m_tokens: 30.00
+      output_usd_per_1m_tokens: 180.00
+      long_context_input_usd_per_1m_tokens: 60.00
+      long_context_output_usd_per_1m_tokens: 270.00
+      max_output_tokens: 8000
+      budget_pool: emergency
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "emergency_pro_reviewer:batch":
+      provider: openai
+      model: gpt-5.5-pro
+      service_tier: batch
+      input_usd_per_1m_tokens: 15.00
+      output_usd_per_1m_tokens: 90.00
+      max_output_tokens: 8000
+      budget_pool: emergency
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    # legacy_reasoning_fallback: gpt-5, live-verified Flex-capable 2026-08-07.
+    "legacy_reasoning_fallback:flex":
+      provider: openai
+      model: gpt-5
+      service_tier: flex
+      input_usd_per_1m_tokens: 0.625
+      cached_input_usd_per_1m_tokens: 0.0625
+      output_usd_per_1m_tokens: 5.00
+      max_output_tokens: 4000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "legacy_reasoning_fallback:default":
+      provider: openai
+      model: gpt-5
+      service_tier: default
+      input_usd_per_1m_tokens: 1.25
+      cached_input_usd_per_1m_tokens: 0.125
+      output_usd_per_1m_tokens: 10.00
+      max_output_tokens: 4000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    # mini_legacy_fallback: gpt-5-mini, live-verified Flex-capable 2026-08-07.
+    "mini_legacy_fallback:flex":
+      provider: openai
+      model: gpt-5-mini
+      service_tier: flex
+      input_usd_per_1m_tokens: 0.125
+      cached_input_usd_per_1m_tokens: 0.0125
+      output_usd_per_1m_tokens: 1.00
+      max_output_tokens: 4000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    "mini_legacy_fallback:default":
+      provider: openai
+      model: gpt-5-mini
+      service_tier: default
+      input_usd_per_1m_tokens: 0.25
+      cached_input_usd_per_1m_tokens: 0.025
+      output_usd_per_1m_tokens: 2.00
+      max_output_tokens: 4000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
+    # non_reasoning_instruction_follower: gpt-4.1, live_calls_disabled=true (no Flex
+    # support, live-verified 2026-08-07) -- pricing kept for reference only.
+    "non_reasoning_instruction_follower:default":
+      provider: openai
+      model: gpt-4.1
+      service_tier: default
+      input_usd_per_1m_tokens: 2.00
+      cached_input_usd_per_1m_tokens: 0.50
+      output_usd_per_1m_tokens: 8.00
+      max_output_tokens: 4000
+      budget_pool: builder
       source_url: https://developers.openai.com/api/docs/pricing
       retrieved_or_verified_date: "2026-05-11"

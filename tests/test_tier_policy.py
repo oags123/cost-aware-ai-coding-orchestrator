@@ -50,8 +50,13 @@ def real_patch_provider() -> FakeModelProvider:
 
 
 def pricing(output_tokens: int = 100) -> PricingSettings:
-    # Every automatically-routable role needs a "{role}:flex" pricing entry, or
-    # AppConfig's strict Flex-only policy validator rejects construction.
+    # Every live-callable role (live_calls_disabled=False) needs a "{role}:flex"
+    # pricing entry, or AppConfig's strict Flex-only policy validator rejects
+    # construction. Derive the role list from the default registry so this stays
+    # correct as roles are added/changed.
+    live_roles = [
+        name for name, role in AppConfig().model_roles.roles.items() if not role.live_calls_disabled
+    ]
     return PricingSettings(
         roles={
             f"{role}:flex": ModelPricing(
@@ -64,13 +69,7 @@ def pricing(output_tokens: int = 100) -> PricingSettings:
                 max_output_tokens=output_tokens,
                 budget_pool="builder",
             )
-            for role in (
-                "mechanical_worker",
-                "classification_worker",
-                "simple_builder",
-                "general_builder",
-                "coding_optimized_builder",
-            )
+            for role in live_roles
         }
     )
 
@@ -115,7 +114,6 @@ def test_flex_selected_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert state.tool_results["builder"]["service_tier"] == "flex"
     assert state.tool_results["requested_service_tier"] == "flex"
     assert state.tool_results["actual_service_tier"] == "flex"
-    assert state.tool_results["manual_service_tier_override"] is False
 
 
 def test_flex_transient_error_retries_on_flex_only_then_succeeds(

@@ -18,17 +18,22 @@ Main config file: `config.yaml` (example in `config.example.yaml`).
 - `providers.openai.runtime_enabled` controls real API calls.
 - API key is read only from `OPENAI_API_KEY` (or configured env var).
 
-## Service tiers: Flex is mandatory, not a preference
+## Service tiers: Flex is mandatory for every live request, no exceptions
 
-Every automatically routed call requests OpenAI's `flex` tier. This is validated at
-config load time -- `AppConfig` rejects any configuration where an
-automatically-routable role (`mechanical_worker`, `classification_worker`,
-`simple_builder`, `general_builder`, `coding_optimized_builder`) doesn't default to
-`flex`, declares a `fallback_service_tier`, or lacks a verified `{role}:flex` pricing
-entry. There is no automatic escalation to `default`/`priority`/`batch`/`fast` under
-any circumstance; see `docs/COST_CONTROL.md` for the full policy, the bounded-retry
-behavior when Flex is unavailable, and the explicit `--allow-non-flex-tier` manual
-override.
+Every role that can make a real (paid) OpenAI call -- automatic builders,
+classification, diagnosis reviewers, frontier reviewers, emergency reviewers, and
+legacy/manual aliases alike -- requests OpenAI's `flex` tier. This is enforced twice:
+
+- At config load time: `AppConfig` rejects any configuration where a live-callable
+  role (anything without `live_calls_disabled: true`) doesn't default to `flex`,
+  declares a `fallback_service_tier`, or lacks a verified `{role}:flex` pricing entry.
+- At the actual call boundary: `OpenAIProvider.generate()` refuses unconditionally,
+  before any API interaction, if the resolved role isn't `flex` or is
+  `live_calls_disabled`. There is no CLI flag, constructor parameter, or config
+  setting that can force a non-Flex live call -- see `docs/COST_CONTROL.md` for the
+  full policy and which two models (`gpt-5.3-codex`, `gpt-4.1`) don't support Flex
+  and are therefore `live_calls_disabled` instead.
 
 `inference.builder_service_tier.flex.max_flex_retries` (default `2`) bounds how many
-times a transient Flex failure is retried -- every retry still requests Flex.
+times a transient Flex failure is retried -- every retry still requests Flex, and the
+model/role never changes.

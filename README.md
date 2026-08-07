@@ -58,7 +58,7 @@ The CLI's exit code reflects this: `run`/`run-all` exit non-zero unless every ta
 
 ## Role Defaults
 
-Every automatically routed role below runs on Flex only -- see "Service Tier Policy"
+Every role that can make a live call runs on Flex only -- see "Service Tier Policy"
 below for what that means and why.
 
 - `mechanical_worker` -> `gpt-5.4-nano` (`flex`, reasoning `none/low`)
@@ -67,10 +67,16 @@ below for what that means and why.
 - `general_builder` -> `gpt-5.4-mini` (`flex`, reasoning `low/medium`)
 - `coding_optimized_builder` -> `gpt-5.4-mini` (`flex`, reasoning `medium`; retargeted
   from `gpt-5.3-codex`, which does not support Flex)
-- `frontier_reviewer` -> `gpt-5.5` (`default`, diagnosis-first, dry-run only today)
-- `frontier_coding_reviewer` -> `gpt-5.3-codex` (`default`, manual-override-only, never
-  auto-routed -- codex has no Flex support)
-- `emergency_pro_reviewer` -> `gpt-5.5-pro` (manual approval only)
+- `frontier_balanced_reviewer` -> `gpt-5.4` (`flex`, diagnosis-first, dry-run only today)
+- `frontier_reviewer` -> `gpt-5.5` (`flex`, diagnosis-first, dry-run only today)
+- `emergency_pro_reviewer` -> `gpt-5.5-pro` (`flex`, manual approval required)
+- `legacy_reasoning_fallback` -> `gpt-5` (`flex`, manual selection only)
+- `mini_legacy_fallback` -> `gpt-5-mini` (`flex`, manual selection only)
+- `frontier_coding_reviewer` -> `gpt-5.3-codex` -- **disabled for all live calls**
+  (`live_calls_disabled: true`); codex has no Flex support, so this role is
+  analysis/configuration-only
+- `non_reasoning_instruction_follower` -> `gpt-4.1` -- **disabled for all live calls**;
+  gpt-4.1 has no Flex support
 
 `mechanical_worker` remains the active routed nano role for tiny deterministic coding and bounded patches. `classification_worker` is a canonical role for classification and summarization workloads, but is currently manual/reserved unless selected explicitly by config or policy.
 
@@ -103,30 +109,37 @@ These three run automatically on every push/PR via `.github/workflows/ci.yml`.
 
 See [Safety](docs/SAFETY.md) for the full design.
 
-## Service Tier Policy: Flex Is Mandatory
+## Service Tier Policy: Flex Is Mandatory, Globally, With No Override
 
-Cost predictability is prioritized over latency. Every automatically routed OpenAI call
-requests the `flex` service tier -- roughly **50% cheaper per token than Standard/Default**
-for supported models, at the cost of higher latency and occasionally reduced availability.
-This is enforced as a real invariant, checked at config-load time, not merely a default:
+Cost predictability is prioritized over latency. **No paid OpenAI request of any kind
+may ever use a service tier other than `flex`** -- not automatic builders, not
+classification, not diagnosis reviewers, not frontier reviewers, not emergency
+reviewers, not legacy/manual aliases, not direct role selection. Flex is roughly
+**50% cheaper per token than Standard/Default** for supported models, at the cost of
+higher latency and occasionally reduced availability. This is enforced at two
+independent layers so no code path can bypass it:
 
-- A configuration that would let an automatically-routable role skip Flex, declare an
-  automatic fallback tier, or route through a model without verified Flex pricing is
-  **rejected outright** when the config is loaded.
-- There is **no automatic fallback** to Standard, Default, Priority, or Fast, ever. On a
-  transient Flex failure, the engine retries a bounded number of times
-  (`inference.builder_service_tier.flex.max_flex_retries`) -- every retry still requests
-  Flex. Once exhausted, the task ends with `flex_unavailable`, not an escalation to a
-  pricier tier.
-- If OpenAI ever reports back a different tier than what was requested, that response is
-  never accepted as a normal success -- the task is `blocked` and the discrepancy is
-  recorded.
-- `gpt-5.3-codex` does not support Flex (live-verified against the real API). Its former
-  role, `coding_optimized_builder`, was retargeted to `gpt-5.4-mini`. `frontier_coding_reviewer`
-  intentionally keeps codex but is manual-override-only, never auto-routed.
-- The **only** way to use a non-Flex tier is an explicit, per-run, visible override:
-  `coding-orchestrator --allow-non-flex-tier {default,priority,batch,fast} run ...`. It is
-  never enabled by config inheritance and is logged prominently every time it's used.
+- **Config load time**: a configuration that would let any live-callable role skip
+  Flex, declare an automatic fallback tier, or route through a model without verified
+  Flex pricing is **rejected outright**.
+- **The actual call boundary**: `OpenAIProvider.generate()` unconditionally refuses,
+  before any API interaction, any request whose role isn't `flex` or is marked
+  `live_calls_disabled`. There is **no override flag, constructor parameter, or config
+  setting** that can force a non-Flex live call, for any role, ever.
+
+On a transient Flex failure, the engine retries a bounded number of times
+(`inference.builder_service_tier.flex.max_flex_retries`) -- every retry still requests
+Flex, and the model/role never changes. Once exhausted, the task ends with
+`flex_unavailable`, not an escalation to a pricier tier. If OpenAI ever reports back a
+different tier than what was requested, that response is never accepted as a normal
+success -- no output is applied, the repository is rolled back, and the task is
+`blocked` with the discrepancy recorded.
+
+`gpt-5.3-codex` and `gpt-4.1` do not support Flex (both live-verified against the real
+API). `coding_optimized_builder` (previously codex) was retargeted to `gpt-5.4-mini`.
+`frontier_coding_reviewer` (codex) and `non_reasoning_instruction_follower` (gpt-4.1)
+are `live_calls_disabled: true` -- analysis/configuration-only, can never make a real
+call, with no override to change that.
 
 See [Cost Control](docs/COST_CONTROL.md) for the full design.
 

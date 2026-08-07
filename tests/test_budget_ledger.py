@@ -11,8 +11,13 @@ from coding_orchestrator.schemas import TaskSpec
 
 
 def pricing(output_tokens: int = 1000) -> PricingSettings:
-    # Every automatically-routable role needs a "{role}:flex" pricing entry, or
-    # AppConfig's strict Flex-only policy validator rejects construction.
+    # Every live-callable role (live_calls_disabled=False) needs a "{role}:flex"
+    # pricing entry, or AppConfig's strict Flex-only policy validator rejects
+    # construction. Derive the role list from the default registry so this stays
+    # correct as roles are added/changed.
+    live_roles = [
+        name for name, role in AppConfig().model_roles.roles.items() if not role.live_calls_disabled
+    ]
     roles = {
         f"{role}:flex": ModelPricing(
             provider="test",
@@ -24,13 +29,7 @@ def pricing(output_tokens: int = 1000) -> PricingSettings:
             max_output_tokens=output_tokens,
             budget_pool="builder",
         )
-        for role in (
-            "mechanical_worker",
-            "classification_worker",
-            "simple_builder",
-            "general_builder",
-            "coding_optimized_builder",
-        )
+        for role in live_roles
     }
     roles["frontier_reviewer:default"] = ModelPricing(
         provider="test",

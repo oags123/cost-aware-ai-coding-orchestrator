@@ -25,6 +25,26 @@ class OpenAIProvider(ModelProvider):
         self.settings = settings or OpenAIProviderSettings()
 
     def generate(self, request: ProviderRequest) -> ProviderResponse:
+        # Airtight, unconditional Flex-only enforcement at the actual call boundary --
+        # no automatic routing, manual role selection, diagnosis path, retry logic, or
+        # future code change can bypass this. Checked before any other setting
+        # (including whether the provider is even enabled), so a misconfigured or
+        # disallowed role is blocked before generation, never billed.
+        if request.role.live_calls_disabled:
+            raise ProviderConfigurationError(
+                f"model role {request.role.role_name!r} (model={request.role.model!r}) "
+                "has live_calls_disabled=True: its model is verified to not support "
+                "Flex, and this role may never make a real paid API call. Retarget it "
+                "to a Flex-capable model or use a different role."
+            )
+        if request.role.service_tier != "flex":
+            raise ProviderConfigurationError(
+                "refusing to make a live OpenAI request at "
+                f"service_tier={request.role.service_tier!r}: only 'flex' is "
+                "permitted for any live (paid) request under the strict Flex-only "
+                "policy. No silent or explicit fallback to a higher-priced tier is "
+                "allowed. This call was blocked before generation; nothing was billed."
+            )
         if not self.settings.enabled:
             raise ProviderConfigurationError("OpenAI provider is disabled")
         if not self.settings.runtime_enabled:

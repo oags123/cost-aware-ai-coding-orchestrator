@@ -27,57 +27,67 @@ No pricing is hardcoded in runtime business logic.
 
 Reasoning tokens are billed as output and consume context. Reserve output and context headroom for diagnosis/refactor tasks.
 
-## Service tier policy: Flex is mandatory
+## Service tier policy: Flex is mandatory, globally, with no override
 
-**Every automatically routed call requests OpenAI's `flex` service tier. There is no
-automatic fallback to `default`, `priority`, `batch`, or `fast` -- ever.** This is
-enforced as a real invariant, not merely a default:
+**No paid OpenAI request of any kind -- automatic builder, classification, diagnosis
+reviewer, frontier reviewer, emergency reviewer, legacy/manual alias, or any future
+direct-provider call -- may ever use a service tier other than `flex`. There is no
+fallback and no override mechanism, silent or explicit.** This is enforced at two
+independent layers, so no code path can bypass it:
 
-- `AppConfig` validates at construction time (from YAML or in Python) that every
-  automatically-routable role (`mechanical_worker`, `classification_worker`,
-  `simple_builder`, `general_builder`, `coding_optimized_builder`) defaults to `flex`,
-  declares no `fallback_service_tier`, and has a verified `{role}:flex` pricing entry.
-  A config that violates this is rejected outright at load time.
-- `WorkflowEngine._run_role_builder` requests `flex` on every attempt, with no
-  tier-switching code path left in the engine at all.
-- Flex is roughly **50% cheaper per token than Standard/Default** for supported
-  models (see the pricing tables in `config.example.yaml`), at the cost of higher
-  latency and occasionally reduced availability compared to Standard.
+1. **Config-load time** (`AppConfig._enforce_flex_only_policy`, a pydantic
+   validator): every role in `model_roles.roles` must default to `flex`, declare no
+   `fallback_service_tier`, and have a verified `{role}:flex` pricing entry --
+   *unless* it's marked `live_calls_disabled=True` (reserved for roles whose model
+   is verified to not support Flex; see below). A config violating this is rejected
+   outright, whether loaded from YAML or constructed directly in Python/tests.
+2. **The actual call boundary** (`OpenAIProvider.generate`): before touching the
+   OpenAI SDK at all, the provider unconditionally refuses any request whose
+   resolved role isn't `service_tier="flex"`, and unconditionally refuses any
+   `live_calls_disabled` role. This is checked first, before even the
+   enabled/runtime-enabled/API-key checks -- there is no parameter, override, or
+   code path (automatic routing, manual role selection, diagnosis, retries, direct
+   provider use) that can reach a real API call at a non-Flex tier.
+
+Flex is roughly **50% cheaper per token than Standard/Default** for supported models
+(see the pricing tables in `config.example.yaml`), at the cost of higher latency and
+occasionally reduced availability compared to Standard.
 
 ### What happens when Flex is unavailable
 
 On a transient Flex error (timeout, rate limit, capacity), the engine retries a
 bounded number of times (`inference.builder_service_tier.flex.max_flex_retries`,
-default 2) -- **every retry still requests Flex**. If all bounded retries are
-exhausted, the task ends with `final_status: "flex_unavailable"`, the repository is
-left exactly as it was before the task started (via the same stash-based
-checkpoint/rollback used for every other failure mode), and the validation message
-explicitly states that no higher-priced tier was used. This is a pause, not an
-automatic escalation to more expensive processing.
+default 2) -- **every retry still requests Flex; the model and tier never change**.
+If all bounded retries are exhausted, the task ends with
+`final_status: "flex_unavailable"`, the repository is left exactly as it was before
+the task started (via the same stash-based checkpoint/rollback used for every other
+failure mode), and the validation message explicitly states that no higher-priced
+tier was used. This is a pause, not an automatic escalation to more expensive
+processing.
 
 If the provider ever reports back a service tier other than what was requested (e.g.
 Flex was requested but a different tier was actually used), the response is **not**
-treated as a normal successful call: the discrepancy is recorded
-(`tool_results.service_tier_mismatch`) and the task is blocked
-(`final_status: "blocked"`) rather than silently accepted.
+treated as a normal successful call: no output is applied, the repository is rolled
+back, the discrepancy (requested vs. actual tier) is recorded
+(`tool_results.service_tier_mismatch`), and the task is blocked
+(`final_status: "blocked"`) rather than silently accepted or marked completed.
 
-### Manual override (rare, explicit, never silent)
+### Roles whose model does not support Flex
 
-A small set of roles that are not automatically reachable (`frontier_coding_reviewer`,
-which intentionally stays on `gpt-5.3-codex` -- a model that does not support Flex --
-for its coding-specialized review quality; `emergency_pro_reviewer`, which is already
-manual-approval-gated) are exempt from the automatic policy above. For any other
-one-off use of a non-Flex tier, pass `--allow-non-flex-tier {default,priority,batch,fast}`
-to the CLI (or `manual_service_tier_override=` to `WorkflowEngine` directly). This is
-per-run, printed to stdout, and written to the JSONL log as
-`manual_service_tier_override_active` -- it can never be enabled by config inheritance
-or triggered by any fallback/retry logic.
+Two models were live-verified (2026-08-07, real OpenAI API) to reject
+`service_tier="flex"`:
 
-### Verified Flex support
+- **`gpt-5.3-codex`** -- rejected with `"Flex is not available for this model."`
+  `coding_optimized_builder`, which previously used codex, was retargeted to
+  `gpt-5.4-mini` (Flex-capable) so it stays live-callable. `frontier_coding_reviewer`
+  intentionally keeps codex for its coding-specialized review quality but is
+  `live_calls_disabled=True` -- analysis/configuration-only, can never make a real
+  call, and there is no override to force it to.
+- **`gpt-4.1`** -- rejected with `"Invalid service_tier argument."`
+  `non_reasoning_instruction_follower` keeps gpt-4.1 (the role exists specifically
+  for its non-reasoning behavior, with no equivalent Flex-capable substitute) but is
+  likewise `live_calls_disabled=True`.
 
-`gpt-5.3-codex` does **not** support Flex -- live-verified against the real OpenAI API
-(2026-08-07): a `service_tier="flex"` request for this model is rejected with `"Flex
-is not available for this model."` The `coding_optimized_builder` role, which
-previously used codex, was retargeted to `gpt-5.4-mini` (Flex-capable, already used by
-`simple_builder`/`general_builder`) so it stays reachable through automatic routing.
-`frontier_coding_reviewer` intentionally keeps `gpt-5.3-codex` but is manual-override-only.
+Every other model in the registry (`gpt-5.4-nano`, `gpt-5-nano`, `gpt-5.4-mini`,
+`gpt-5.4`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5`, `gpt-5-mini`) was live-verified
+Flex-capable and every role using them defaults to `flex`.

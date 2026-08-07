@@ -259,7 +259,7 @@ def test_resolve_model_role_uses_aliases_and_frontier_patch_policy() -> None:
 
     reviewer = resolve_model_role(config, "frontier_reviewer")
     assert reviewer.model == "gpt-5.5"
-    assert reviewer.service_tier == "default"
+    assert reviewer.service_tier == "flex"
     assert reviewer.allow_direct_patch is False
 
 

@@ -5,7 +5,61 @@ tests" to genuinely operational and safe for real-world use. It follows on from 
 pre-release audit that found the engineering quality was solid (tests/lint/type-check all
 green) but several load-bearing safety and correctness invariants were violated by default.
 
-## Strict Flex-only execution policy (later addition)
+## Global strict Flex-only policy (supersedes the manual override below)
+
+A further follow-up closed the one remaining gap in the policy described in the next
+section: the manual override. The updated policy is unconditional -- **no paid OpenAI
+request of any kind may ever use a non-Flex tier, including via manual override** --
+and now covers every role in the registry, not just the automatically-routed builders.
+
+- `ModelRoleSettings.live_calls_disabled: bool` (default `False`) is the only
+  recognized exception mechanism: a role with this set can never make a real
+  provider call, full stop, and is analysis/configuration-only.
+- `AppConfig._enforce_flex_only_policy` was broadened from checking 5
+  auto-routable roles to checking **every role in `model_roles.roles`**: any
+  live-enabled role (`live_calls_disabled=False`) must default to Flex, declare no
+  fallback tier, and have verified Flex pricing, or config construction fails. It
+  also validates that `diagnosis.model_role` doesn't resolve to a
+  `live_calls_disabled` role.
+- **`OpenAIProvider.generate()` gained an unconditional, airtight guard** as the
+  actual enforcement boundary: before touching the SDK at all (before even checking
+  whether the provider is enabled), it refuses any request whose role isn't
+  `service_tier="flex"` or is `live_calls_disabled`. This is the point no code
+  path -- automatic routing, direct/manual role selection, diagnosis, retries,
+  future code -- can bypass, because it's where the money is actually spent.
+- **The `--allow-non-flex-tier` CLI flag and `manual_service_tier_override`
+  constructor parameter were removed entirely.** They became categorically unusable
+  once the provider-level guard was added (any attempt would simply be refused), so
+  keeping them would have left dead, misleading code -- itself a form of the
+  "explicit fallback" the policy exists to prevent.
+- `frontier_balanced_reviewer` (`gpt-5.4`), `frontier_reviewer` (`gpt-5.5`), and
+  `emergency_pro_reviewer` (`gpt-5.5-pro`, manual approval preserved) were switched
+  from `default` to `flex` -- all three live-verified Flex-capable.
+- `legacy_reasoning_fallback` (`gpt-5`) and `mini_legacy_fallback` (`gpt-5-mini`)
+  were live-verified Flex-capable and switched to `flex`, with new `:flex` pricing
+  entries added (following the ~50% ratio already established for every other
+  model in the table).
+- **`gpt-4.1` does not support Flex** -- live-verified against the real API: a
+  `service_tier="flex"` request is rejected with `"Invalid service_tier argument."`
+  `non_reasoning_instruction_follower` is now `live_calls_disabled=True`.
+- `frontier_coding_reviewer` (`gpt-5.3-codex`) changed from "manual-override-only"
+  to `live_calls_disabled=True` -- it can no longer make a live call under any
+  circumstance, closing the gap where the old manual override could have been used
+  to run it at `default` tier.
+- 8 more regression tests added to `tests/test_flex_only_policy.py` (29 total)
+  covering the global scope explicitly: diagnosis role Flex-compliance, a config
+  rejection test for diagnosis pointed at a disabled role, emergency reviewer
+  Flex-with-manual-approval, legacy/alias role compliance, a sweep asserting every
+  live-enabled role in the registry is Flex-and-priced, and a sweep confirming the
+  provider refuses every role if forced to a non-Flex tier.
+- Live-verified against the real API (2026-08-07): `gpt-5-mini`, `gpt-5`, `gpt-5.4`,
+  and `gpt-5.5` all accept Flex; `gpt-4.1` rejects it. Combined live-test cost for
+  this round: under $0.001 (five tiny `max_output_tokens=16` calls; `gpt-5.5-pro`
+  was intentionally not live-tested with a real generation call, per an explicit
+  cost exception for expensive emergency-only roles -- verified by configuration
+  and existing documented pricing instead).
+
+## Strict Flex-only execution policy (superseded in part by the section above)
 
 A follow-up requirement made cost predictability an explicit, enforced invariant: every
 automatically routed OpenAI call must request the `flex` service tier, with **no

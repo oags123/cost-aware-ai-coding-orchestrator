@@ -10,20 +10,12 @@ from coding_orchestrator.schemas import TaskSpec
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # No non-Flex override flag exists: every live OpenAI request must use the Flex
+    # service tier, enforced unconditionally at the provider call boundary
+    # (OpenAIProvider.generate) with no override mechanism of any kind. See
+    # docs/COST_CONTROL.md.
     parser = argparse.ArgumentParser(prog="coding-orchestrator")
     parser.add_argument("--config", default=None)
-    parser.add_argument(
-        "--allow-non-flex-tier",
-        default=None,
-        choices=["default", "priority", "batch", "fast"],
-        metavar="{default,priority,batch,fast}",
-        help=(
-            "Explicit, per-run manual override to use a non-Flex service tier for "
-            "automatically routed calls. Flex is mandatory by default; this flag "
-            "must be passed deliberately for every run where it applies -- it is "
-            "never enabled by config inheritance or automatic fallback."
-        ),
-    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run")
@@ -40,12 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
-    if args.allow_non_flex_tier:
-        print(
-            f"WARNING: --allow-non-flex-tier={args.allow_non_flex_tier} is active for "
-            "this run only. Automatically routed calls will NOT use Flex.",
-        )
-    engine = WorkflowEngine(config, manual_service_tier_override=args.allow_non_flex_tier)
+    engine = WorkflowEngine(config)
     if args.command == "run":
         state = engine.run_task_file(Path(args.task))
         print(state.model_dump_json(indent=2))

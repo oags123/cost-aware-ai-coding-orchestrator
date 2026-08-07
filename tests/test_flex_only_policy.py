@@ -347,70 +347,92 @@ def test_coding_optimized_builder_retargeted_away_from_codex() -> None:
     assert config.model_aliases.model_dump()[role.model_alias] != "gpt-5.3-codex"
 
 
-# --- 7. Manual override is explicit and visible ---
+# --- 7. There is no non-Flex override mechanism anywhere, for any path ---
 
 
-def test_manual_override_is_explicit_and_never_default(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_workflow_engine_has_no_manual_tier_override_parameter(tmp_path: Path) -> None:
+    import inspect
+
     init_repo(tmp_path)
     commit_file(tmp_path, "app.py", "old\n")
 
-    # No override passed -> always Flex, regardless of config content.
-    default_engine = WorkflowEngine(
-        base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
-    )
-    assert default_engine.manual_service_tier_override is None
-    monkeypatch.setattr(default_engine, "_validate", lambda task: [])
-    state = default_engine.run_task(TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]))
-    assert state.tool_results["requested_service_tier"] == "flex"
-    assert state.tool_results["manual_service_tier_override"] is False
+    signature = inspect.signature(WorkflowEngine.__init__)
+    assert "manual_service_tier_override" not in signature.parameters
+    assert not hasattr(WorkflowEngine(base_config(tmp_path)), "manual_service_tier_override")
 
 
-def test_manual_override_is_visible_in_logs(tmp_path: Path) -> None:
-    init_repo(tmp_path)
-    commit_file(tmp_path, "app.py", "old\n")
-    config = base_config(tmp_path)
-
-    WorkflowEngine(config, manual_service_tier_override="default")
-
-    log_path = tmp_path / "log.jsonl"
-    log_content = log_path.read_text(encoding="utf-8")
-    assert "manual_service_tier_override_active" in log_content
-    assert "MANUAL OVERRIDE" in log_content
-    assert "default" in log_content
-
-
-def test_manual_override_applies_to_builder_calls_when_set(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    init_repo(tmp_path)
-    commit_file(tmp_path, "app.py", "old\n")
-    config = base_config(tmp_path)
-    engine = WorkflowEngine(
-        config,
-        provider_overrides={"openai": real_patch_provider()},
-        manual_service_tier_override="default",
-    )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
-
-    state = engine.run_task(TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]))
-
-    assert state.tool_results["requested_service_tier"] == "default"
-    assert state.tool_results["manual_service_tier_override"] is True
-
-
-def test_cli_exposes_explicit_non_flex_override_flag() -> None:
+def test_cli_has_no_non_flex_override_flag() -> None:
     from coding_orchestrator.app import build_parser
 
     parser = build_parser()
-    args = parser.parse_args(
-        ["--allow-non-flex-tier", "default", "run", "--task", "tasks/example_task.md"]
-    )
-    assert args.allow_non_flex_tier == "default"
+    args = parser.parse_args(["run", "--task", "tasks/example_task.md"])
+    assert not hasattr(args, "allow_non_flex_tier")
 
-    default_args = parser.parse_args(["run", "--task", "tasks/example_task.md"])
-    assert default_args.allow_non_flex_tier is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["--allow-non-flex-tier", "default", "run", "--task", "tasks/example_task.md"]
+        )
+
+
+def test_default_run_always_requests_flex(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "old\n")
+
+    engine = WorkflowEngine(
+        base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
+    )
+    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    state = engine.run_task(TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]))
+
+    assert state.tool_results["requested_service_tier"] == "flex"
+
+
+def test_provider_refuses_any_non_flex_request_unconditionally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The hard guard in OpenAIProvider.generate() is the actual enforcement boundary
+    # -- construct a request explicitly asking for a non-Flex tier (simulating any
+    # hypothetical future code path, direct-provider use, or manual role selection)
+    # and confirm it is refused before any client/API interaction happens.
+    from coding_orchestrator.config import (
+        OpenAIProviderSettings,
+        ProviderSettings,
+        resolve_model_role,
+    )
+    from coding_orchestrator.models.openai_provider import OpenAIProvider
+    from coding_orchestrator.models.provider import ProviderConfigurationError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    config = AppConfig(
+        providers=ProviderSettings(openai=OpenAIProviderSettings(runtime_enabled=True))
+    )
+    role = resolve_model_role(config, "general_builder", service_tier="default")
+    provider = OpenAIProvider(OpenAIProviderSettings(runtime_enabled=True))
+    request = ProviderRequest(role=role, prompt="do it")
+
+    with pytest.raises(ProviderConfigurationError, match="only 'flex' is permitted"):
+        provider.generate(request)
+
+
+def test_provider_refuses_live_calls_disabled_role_unconditionally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from coding_orchestrator.config import OpenAIProviderSettings, resolve_model_role
+    from coding_orchestrator.models.openai_provider import OpenAIProvider
+    from coding_orchestrator.models.provider import ProviderConfigurationError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    config = AppConfig()
+    # frontier_coding_reviewer defaults to "default" tier and live_calls_disabled=True
+    # (gpt-5.3-codex has no Flex support) -- even resolving it at "flex" explicitly
+    # must still be refused because live_calls_disabled is unconditional.
+    role = resolve_model_role(config, "frontier_coding_reviewer", service_tier="flex")
+    assert role.live_calls_disabled is True
+    provider = OpenAIProvider(OpenAIProviderSettings(runtime_enabled=True))
+    request = ProviderRequest(role=role, prompt="do it")
+
+    with pytest.raises(ProviderConfigurationError, match="live_calls_disabled=True"):
+        provider.generate(request)
 
 
 # --- 8. Ledger records requested and returned tiers correctly ---
@@ -481,3 +503,83 @@ def test_service_tier_mismatch_blocks_task_conservatively(
     assert mismatch == {"requested": "flex", "actual": "default"}
     # Repository must not carry the unverified change through as if it succeeded.
     assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old\n"
+
+
+# --- Requirement 9 (global scope): diagnosis, emergency, and legacy/alias paths ---
+
+
+def test_diagnosis_role_resolves_flex_compliant() -> None:
+    config = AppConfig()
+    from coding_orchestrator.config import resolve_model_role
+
+    diagnosis_role = resolve_model_role(config, config.diagnosis.model_role)
+    assert diagnosis_role.service_tier == "flex"
+    assert diagnosis_role.live_calls_disabled is False
+
+
+def test_diagnosis_model_role_pointing_at_disabled_role_rejected() -> None:
+    from coding_orchestrator.config import DiagnosisSettings
+
+    with pytest.raises(pydantic.ValidationError, match="live_calls_disabled=True"):
+        AppConfig(diagnosis=DiagnosisSettings(model_role="frontier_coding_reviewer"))
+
+
+def test_emergency_reviewer_is_flex_with_manual_approval_preserved() -> None:
+    config = AppConfig()
+    from coding_orchestrator.config import resolve_model_role
+
+    role = config.model_roles.roles["emergency_pro_reviewer"]
+    assert role.default_service_tier == "flex"
+    assert role.fallback_service_tier is None
+    assert role.manual_approval_required is True
+    resolved = resolve_model_role(config, "emergency_pro_reviewer")
+    assert resolved.service_tier == "flex"
+    assert "emergency_pro_reviewer:flex" in config.pricing.roles
+
+
+def test_legacy_and_alias_roles_are_flex_or_explicitly_disabled() -> None:
+    config = AppConfig()
+    # gpt-5 and gpt-5-mini are live-verified Flex-capable -> must be flex.
+    for role_name in ("legacy_reasoning_fallback", "mini_legacy_fallback"):
+        role = config.model_roles.roles[role_name]
+        assert role.default_service_tier == "flex"
+        assert role.fallback_service_tier is None
+        assert role.live_calls_disabled is False
+        assert f"{role_name}:flex" in config.pricing.roles
+    # gpt-4.1 is NOT Flex-capable -> must be fully disabled for live calls, never
+    # reachable at "default" or any other paid tier.
+    non_reasoning = config.model_roles.roles["non_reasoning_instruction_follower"]
+    assert non_reasoning.live_calls_disabled is True
+
+
+def test_every_live_enabled_role_in_registry_is_flex_and_priced() -> None:
+    # Comprehensive sweep: for every role in the default registry, either it is
+    # live_calls_disabled (and therefore provably unreachable at the provider
+    # boundary, see test_provider_refuses_live_calls_disabled_role_unconditionally),
+    # or it is Flex-only with verified pricing. No third state exists.
+    config = AppConfig()
+    for role_name, role in config.model_roles.roles.items():
+        if role.live_calls_disabled:
+            continue
+        assert role.default_service_tier == "flex", role_name
+        assert role.fallback_service_tier is None, role_name
+        assert f"{role_name}:flex" in config.pricing.roles, role_name
+
+
+def test_every_live_enabled_role_is_blocked_at_provider_if_forced_non_flex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Belt-and-suspenders: even if some future bug resolved a live-enabled role at a
+    # non-Flex tier, the provider must still refuse it. Sweep every role.
+    from coding_orchestrator.config import OpenAIProviderSettings, resolve_model_role
+    from coding_orchestrator.models.openai_provider import OpenAIProvider
+    from coding_orchestrator.models.provider import ProviderConfigurationError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    config = AppConfig()
+    provider = OpenAIProvider(OpenAIProviderSettings(runtime_enabled=True))
+    for role_name in config.model_roles.roles:
+        role = resolve_model_role(config, role_name, service_tier="default")
+        request = ProviderRequest(role=role, prompt="do it")
+        with pytest.raises(ProviderConfigurationError):
+            provider.generate(request)

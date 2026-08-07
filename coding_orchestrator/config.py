@@ -18,13 +18,11 @@ LEGACY_ROLE_RENAMES = {
     "ultra_cheap_classifier": "classification_worker",
 }
 
-# Roles reachable through automatic routing (WorkflowEngine._select_builder_role, or
-# a role name a future routing path could plausibly select without an explicit manual
-# override). Every role in this set is required to default to the Flex tier, declare
-# no automatic fallback tier, and have a verified "{role}:flex" pricing entry -- see
-# AppConfig._enforce_flex_only_policy. Roles NOT in this set (frontier_*, legacy_*,
-# emergency_pro_reviewer, non_reasoning_instruction_follower) are manual-override-only
-# by design and are exempt.
+# Roles reachable through automatic routing (WorkflowEngine._select_builder_role)
+# without going through the diagnosis/reviewer/emergency escalation paths. Used only
+# for documentation/tests; the strict Flex-only policy below applies GLOBALLY to
+# every role in the registry, not just this subset -- see
+# AppConfig._enforce_flex_only_policy and ModelRoleSettings.live_calls_disabled.
 AUTO_ROUTABLE_BUILDER_ROLES: frozenset[str] = frozenset(
     {
         "mechanical_worker",
@@ -430,6 +428,18 @@ class PricingSettings(BaseModel):
                 max_output_tokens=8000,
                 budget_pool="emergency",
             ),
+            # gpt-5 live-verified Flex-capable 2026-08-07; flex rate follows the
+            # same ~50% ratio observed for every other model in this table.
+            "legacy_reasoning_fallback:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5",
+                service_tier="flex",
+                input_usd_per_1m_tokens=0.625,
+                cached_input_usd_per_1m_tokens=0.0625,
+                output_usd_per_1m_tokens=5.0,
+                max_output_tokens=4000,
+                budget_pool="builder",
+            ),
             "legacy_reasoning_fallback:default": ModelPricing(
                 provider="openai",
                 model="gpt-5",
@@ -437,6 +447,17 @@ class PricingSettings(BaseModel):
                 input_usd_per_1m_tokens=1.25,
                 cached_input_usd_per_1m_tokens=0.125,
                 output_usd_per_1m_tokens=10.0,
+                max_output_tokens=4000,
+                budget_pool="builder",
+            ),
+            # gpt-5-mini live-verified Flex-capable 2026-08-07.
+            "mini_legacy_fallback:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5-mini",
+                service_tier="flex",
+                input_usd_per_1m_tokens=0.125,
+                cached_input_usd_per_1m_tokens=0.0125,
+                output_usd_per_1m_tokens=1.0,
                 max_output_tokens=4000,
                 budget_pool="builder",
             ),
@@ -450,6 +471,9 @@ class PricingSettings(BaseModel):
                 max_output_tokens=4000,
                 budget_pool="builder",
             ),
+            # gpt-4.1 does NOT support Flex (live-verified 2026-08-07: "Invalid
+            # service_tier argument"). No flex entry -- this role is
+            # live_calls_disabled and can never make a live paid call.
             "non_reasoning_instruction_follower:default": ModelPricing(
                 provider="openai",
                 model="gpt-4.1",
@@ -507,6 +531,12 @@ class ModelRoleSettings(BaseModel):
     fallback_service_tier: ServiceTier | None = None
     max_attempts: int = 2
     manual_approval_required: bool = False
+    # True only for roles whose model is known NOT to support Flex (e.g.
+    # gpt-5.3-codex) and that were deliberately kept on that model rather than
+    # retargeted. Such roles can never make a real (paid) provider call -- the
+    # provider layer refuses unconditionally -- and exist purely for
+    # cost-estimation/analysis/documentation purposes.
+    live_calls_disabled: bool = False
 
 
 class ResolvedModelRole(BaseModel):
@@ -527,6 +557,7 @@ class ResolvedModelRole(BaseModel):
     service_tier: ServiceTier
     fallback_service_tier: ServiceTier | None = None
     max_attempts: int
+    live_calls_disabled: bool = False
 
 
 class ModelRoleRegistry(BaseModel):
@@ -603,16 +634,19 @@ class ModelRoleRegistry(BaseModel):
                 fallback_service_tier=None,
             ),
             "frontier_coding_reviewer": ModelRoleSettings(
-                # gpt-5.3-codex does NOT support Flex (live-verified 2026-08-07). This
-                # role is intentionally kept on codex for its coding-specialized review
-                # quality, but is NEVER reachable through automatic routing (diagnosis
-                # is dry-run-only by default; see docs/COST_CONTROL.md) and requires an
-                # explicit manual service-tier override if ever invoked for real, since
-                # its only viable tier is "default", not "flex".
+                # gpt-5.3-codex does NOT support Flex (live-verified 2026-08-07: the
+                # API rejects service_tier="flex" for this model with "Flex is not
+                # available for this model."). Per the strict global Flex-only policy,
+                # a role using a non-Flex model may never make a live/paid request --
+                # kept intentionally on codex for its coding-specialized review
+                # quality, but live_calls_disabled=True makes this role
+                # analysis/configuration-only. The provider layer refuses
+                # unconditionally regardless of any override.
                 model_alias="openai_codex",
                 purpose=(
                     "difficult coding diagnosis and risky multi-file patch review; "
-                    "manual-override-only, no Flex support, never auto-routed"
+                    "codex has no Flex support, so this role is analysis/"
+                    "configuration-only and can never make a live paid call"
                 ),
                 max_input_tokens=128_000,
                 max_output_tokens=8_000,
@@ -622,8 +656,10 @@ class ModelRoleRegistry(BaseModel):
                 allow_direct_patch=False,
                 budget_pool="reviewer",
                 max_attempts=1,
+                live_calls_disabled=True,
             ),
             "frontier_balanced_reviewer": ModelRoleSettings(
+                # gpt-5.4 live-verified Flex-capable 2026-08-07.
                 model_alias="openai_frontier_balanced",
                 purpose="cost-conscious architecture-lite and large context review",
                 max_input_tokens=256_000,
@@ -633,9 +669,12 @@ class ModelRoleRegistry(BaseModel):
                 verbosity="medium",
                 allow_direct_patch=False,
                 budget_pool="reviewer",
+                default_service_tier="flex",
+                fallback_service_tier=None,
                 max_attempts=1,
             ),
             "frontier_reviewer": ModelRoleSettings(
+                # gpt-5.5 live-verified Flex-capable 2026-08-07.
                 model_alias="openai_frontier",
                 purpose="architecture, planning, difficult diagnosis, and review",
                 max_input_tokens=256_000,
@@ -645,9 +684,14 @@ class ModelRoleRegistry(BaseModel):
                 verbosity="medium",
                 allow_direct_patch=False,
                 budget_pool="reviewer",
+                default_service_tier="flex",
+                fallback_service_tier=None,
                 max_attempts=1,
             ),
             "emergency_pro_reviewer": ModelRoleSettings(
+                # gpt-5.5-pro: Flex pricing verified/documented (config validation
+                # only -- no live generation call was made for this model, per the
+                # cost policy for expensive emergency roles).
                 model_alias="openai_frontier_pro",
                 purpose="manual approval only final adjudication for hard blockers",
                 max_input_tokens=128_000,
@@ -657,14 +701,15 @@ class ModelRoleRegistry(BaseModel):
                 verbosity="medium",
                 allow_direct_patch=False,
                 budget_pool="emergency",
-                # Manual-approval-gated (never auto-routed), so exempt from the
-                # automatic Flex-only policy; still no automatic tier fallback.
-                default_service_tier="default",
+                # Manual-approval-gated (never auto-routed) but still Flex, per the
+                # global "no paid OpenAI request may ever use a non-Flex tier" policy.
+                default_service_tier="flex",
                 fallback_service_tier=None,
                 max_attempts=1,
                 manual_approval_required=True,
             ),
             "legacy_reasoning_fallback": ModelRoleSettings(
+                # gpt-5 live-verified Flex-capable 2026-08-07.
                 model_alias="openai_legacy_reasoning",
                 purpose="legacy compatibility fallback only",
                 max_input_tokens=64_000,
@@ -673,10 +718,11 @@ class ModelRoleRegistry(BaseModel):
                 reasoning_effort="medium",
                 verbosity="medium",
                 budget_pool="builder",
-                default_service_tier="default",
+                default_service_tier="flex",
                 fallback_service_tier=None,
             ),
             "mini_legacy_fallback": ModelRoleSettings(
+                # gpt-5-mini live-verified Flex-capable 2026-08-07.
                 model_alias="openai_mini_legacy",
                 purpose="legacy gpt-5-mini compatibility fallback only",
                 max_input_tokens=64_000,
@@ -686,12 +732,22 @@ class ModelRoleRegistry(BaseModel):
                 verbosity="medium",
                 allow_direct_patch=False,
                 budget_pool="builder",
-                default_service_tier="default",
+                default_service_tier="flex",
                 fallback_service_tier=None,
             ),
             "non_reasoning_instruction_follower": ModelRoleSettings(
+                # gpt-4.1 does NOT support Flex -- live-verified 2026-08-07: the API
+                # rejects service_tier="flex" for this model with "Invalid
+                # service_tier argument". No Flex-capable equivalent was retargeted
+                # to (this role exists specifically for non-reasoning gpt-4.1
+                # behavior), so it is analysis/configuration-only and can never make
+                # a live paid call.
                 model_alias="openai_non_reasoning",
-                purpose="deterministic instruction-following fallback without reasoning",
+                purpose=(
+                    "deterministic instruction-following fallback without "
+                    "reasoning; gpt-4.1 has no Flex support, so this role is "
+                    "analysis/configuration-only and can never make a live paid call"
+                ),
                 max_input_tokens=64_000,
                 max_output_tokens=4_000,
                 max_context_chars=256_000,
@@ -701,6 +757,7 @@ class ModelRoleRegistry(BaseModel):
                 budget_pool="builder",
                 default_service_tier="default",
                 fallback_service_tier=None,
+                live_calls_disabled=True,
             ),
         }
     )
@@ -776,36 +833,45 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def _enforce_flex_only_policy(self) -> AppConfig:
-        """Enforce the strict Flex-only execution policy as a real config-time
-        invariant, not merely a default: any AppConfig construction (from YAML or
-        directly in Python/tests) that would let an automatically-routable role run
-        outside Flex, fall back automatically to another tier, or route through a
-        model/tier combination without priced Flex support is rejected outright.
+        """Enforce the strict, GLOBAL Flex-only execution policy as a real
+        config-time invariant, not merely a default: no configuration may be
+        constructed (from YAML or directly in Python/tests) that would let ANY
+        live-callable role -- automatic builders, classification, diagnosis
+        reviewers, frontier reviewers, emergency reviewers, or legacy/manual
+        aliases -- run outside Flex, declare an automatic fallback tier, or route
+        through a model/tier combination without priced Flex support.
+
+        The only escape hatch is `ModelRoleSettings.live_calls_disabled=True`,
+        which is reserved for roles whose underlying model is verified to NOT
+        support Flex (e.g. gpt-5.3-codex, gpt-4.1) and that were deliberately kept
+        on that model rather than retargeted; such roles are analysis/
+        configuration-only and the provider layer refuses to ever call them for
+        real (see OpenAIProvider.generate), independent of this validator.
         """
-        for role_name in AUTO_ROUTABLE_BUILDER_ROLES:
-            role = self.model_roles.roles.get(role_name)
-            if role is None:
+        for role_name, role in self.model_roles.roles.items():
+            if role.live_calls_disabled:
                 continue
             if role.default_service_tier != "flex":
                 raise FlexPolicyViolation(
-                    f"model role {role_name!r} is automatically routable but its "
+                    f"model role {role_name!r} can make live calls but its "
                     f"default_service_tier is {role.default_service_tier!r}, not "
-                    "'flex'. Automatically routed roles must default to Flex; use an "
-                    "explicit manual per-run override for any other tier."
+                    "'flex'. Every live-callable role must default to Flex -- set "
+                    "live_calls_disabled=True instead if this role's model cannot "
+                    "use Flex."
                 )
             if role.fallback_service_tier is not None:
                 raise FlexPolicyViolation(
                     f"model role {role_name!r} declares "
                     f"fallback_service_tier={role.fallback_service_tier!r}. Automatic "
                     "tier fallback (Flex to Standard/Default/Priority/Fast) is not "
-                    "permitted -- remove fallback_service_tier from this role."
+                    "permitted for any role -- remove fallback_service_tier."
                 )
             flex_key = f"{role_name}:flex"
             if flex_key not in self.pricing.roles:
                 raise FlexPolicyViolation(
-                    f"model role {role_name!r} is automatically routable at the Flex "
+                    f"model role {role_name!r} can make live calls at the Flex "
                     f"tier but has no {flex_key!r} pricing entry. Verified Flex "
-                    "pricing is required before a role can be auto-routed."
+                    "pricing is required for every live-callable role."
                 )
         for pricing_key, pricing_entry in self.pricing.roles.items():
             if ":" not in pricing_key:
@@ -819,6 +885,15 @@ class AppConfig(BaseModel):
                     "entry used for a call must match the tier actually requested -- "
                     "a Flex call must never be priced using Standard/Default rates."
                 )
+        diagnosis_role_name = _normalize_legacy_role_name(self.diagnosis.model_role)
+        diagnosis_role = self.model_roles.roles.get(diagnosis_role_name)
+        if diagnosis_role is not None and diagnosis_role.live_calls_disabled:
+            raise FlexPolicyViolation(
+                f"diagnosis.model_role={self.diagnosis.model_role!r} resolves to a "
+                "role with live_calls_disabled=True and can never make a real "
+                "diagnosis call. Point diagnosis.model_role at a live-callable, "
+                "Flex-verified role."
+            )
         return self
 
 
@@ -929,6 +1004,7 @@ def resolve_model_role(
         service_tier=selected_service_tier,
         fallback_service_tier=role.fallback_service_tier,
         max_attempts=role.max_attempts,
+        live_calls_disabled=role.live_calls_disabled,
     )
 
 

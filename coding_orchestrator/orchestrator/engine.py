@@ -78,12 +78,10 @@ class WorkflowEngine:
         self,
         config: AppConfig,
         provider_overrides: dict[str, ModelProvider] | None = None,
-        manual_service_tier_override: ServiceTier | None = None,
     ) -> None:
         self.config = config
         self.repo_path = Path(config.repo_path).resolve()
         self.provider_overrides = provider_overrides or {}
-        self.manual_service_tier_override = manual_service_tier_override
         self.openai_provider = OpenAIProvider(config.providers.openai)
         self.classifier = TaskClassifier()
         self.model_router = ModelRouter(config.model_routing)
@@ -102,20 +100,6 @@ class WorkflowEngine:
         state_path = self._resolve_repo_path(config.state_path)
         escalations_path = self._resolve_repo_path(config.escalations_path)
         self.logger = JsonlLogger(log_path)
-        if self.manual_service_tier_override is not None:
-            # Explicit, per-run, and loud: this can only be set by a caller that
-            # deliberately opted in for this one run (e.g. a CLI flag), never by
-            # config inheritance or any fallback/retry logic.
-            self.logger.log(
-                "manual_service_tier_override_active",
-                override_tier=self.manual_service_tier_override,
-                warning=(
-                    f"MANUAL OVERRIDE: this run will use service_tier="
-                    f"{self.manual_service_tier_override!r} instead of the mandatory "
-                    "Flex tier for automatically routed calls. This was explicitly "
-                    "requested for this run only."
-                ),
-            )
         self.telegram = TelegramNotifier(config.telegram, budget_settings)
         self.state_store = StateStore(state_path)
         self.escalation = EscalationManager(escalations_path)
@@ -411,7 +395,7 @@ class WorkflowEngine:
         try:
             context = self.limits.prepare_context(context)
         except LimitExceeded:
-            service_tier = self._effective_service_tier()
+            service_tier: ServiceTier = "flex"
             role_name = self._select_builder_role(task, state)
             role = resolve_model_role(self.config, role_name, service_tier=service_tier)
             pricing = self.budget.pricing_for_role(role_name, service_tier)
@@ -467,30 +451,28 @@ class WorkflowEngine:
     ) -> BuilderResult:
         return self._run_role_builder(task, state, context)
 
-    def _effective_service_tier(self) -> ServiceTier:
-        """The tier automatic builder calls will request this run. Always "flex"
-        unless an explicit, per-run manual override was passed to the constructor --
-        never selected by config inheritance or any fallback/retry logic.
-        """
-        return self.manual_service_tier_override or "flex"
-
     def _run_role_builder(
         self,
         task: TaskSpec,
         state: OrchestratorState,
         context: str,
     ) -> BuilderResult:
-        requested_service_tier = self._effective_service_tier()
-        is_manual_override = self.manual_service_tier_override is not None
+        # Fixed at "flex" -- there is no mechanism anywhere in this engine (manual,
+        # config-driven, or otherwise) that can select a different tier for a live
+        # call. OpenAIProvider.generate() also refuses unconditionally if a resolved
+        # role's service_tier isn't "flex", so this invariant is enforced at both the
+        # routing layer and the actual call boundary.
+        requested_service_tier: ServiceTier = "flex"
         while True:
             role_name = self._select_builder_role(task, state)
             role = resolve_model_role(self.config, role_name, service_tier=requested_service_tier)
-            if not is_manual_override and role.service_tier != "flex":
-                # Defense in depth: AppConfig._enforce_flex_only_policy should already
-                # make this unreachable, but a strict runtime invariant costs nothing.
+            if role.service_tier != "flex" or role.live_calls_disabled:
+                # Defense in depth: AppConfig._enforce_flex_only_policy and
+                # OpenAIProvider.generate() should already make this unreachable.
                 raise ProviderConfigurationError(
                     f"strict Flex-only policy violation: role {role_name!r} resolved "
-                    f"to service_tier={role.service_tier!r} without a manual override"
+                    f"to service_tier={role.service_tier!r} (live_calls_disabled="
+                    f"{role.live_calls_disabled})"
                 )
             estimate = self.budget.estimate_pre_call(
                 task=task,
@@ -511,14 +493,12 @@ class WorkflowEngine:
                     "task_id": task.id,
                     "attempt_id": str(state.retry_count + 1),
                     "requested_service_tier": requested_service_tier,
-                    "manual_override": str(is_manual_override),
                     "provider": role.provider,
                     "model": role.model,
                 },
             )
             provider = self._provider_for_role(role)
             state.tool_results["requested_service_tier"] = requested_service_tier
-            state.tool_results["manual_service_tier_override"] = is_manual_override
             try:
                 response = provider.generate(request)
             except ProviderConfigurationError as exc:
