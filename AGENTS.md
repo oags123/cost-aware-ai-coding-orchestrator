@@ -13,8 +13,10 @@ Implemented:
   retry/escalate, with distinct terminal statuses (`completed`, `dry_run`, `no_change`,
   `blocked`, `escalated`, `failed`, `timeout`, `skipped`) — a disabled/misconfigured
   provider or a no-op builder response is never reported as `completed`
-- role-based model routing and service-tier policy, with typed transient-error
-  classification (`ProviderTransientError`) driving the flex->default fallback
+- strict Flex-only service-tier policy: every automatically routed call requests
+  `flex`, enforced by a config-load-time validator (`AppConfig._enforce_flex_only_policy`)
+  with no automatic fallback tier anywhere in the code; typed transient-error
+  classification (`ProviderTransientError`) drives bounded, Flex-only retries
 - OpenAI provider (env-key only, opt-in runtime via `providers.openai.runtime_enabled`),
   with real SDK exceptions mapped to typed provider errors rather than left unguarded
 - fake provider path for tests/no-network runs

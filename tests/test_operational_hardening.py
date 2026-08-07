@@ -603,16 +603,20 @@ def test_commit_task_refuses_when_no_changed_file_is_in_allowed_set(tmp_path: Pa
 # --- Service-tier fallback must fire on typed transient errors regardless of message text ---
 
 
-def test_flex_fallback_triggers_on_typed_transient_error_without_keyword_match(
+def test_flex_retry_triggers_on_typed_transient_error_without_keyword_match(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # Under the strict Flex-only policy there is no fallback tier to switch to --
+    # a typed ProviderTransientError (even with a message containing none of the
+    # legacy keyword markers) must still trigger a bounded Flex-only retry via
+    # isinstance detection, and the retry must stay on Flex.
     init_repo(tmp_path)
     commit_file(tmp_path, "app.py", "old\n")
     config = base_config(tmp_path).model_copy(
         update={
             "inference": InferenceSettings(
                 builder_service_tier=BuilderServiceTierSettings(
-                    flex=FlexTierSettings(max_consecutive_timeouts=1, timeout_rate_threshold=1.0)
+                    flex=FlexTierSettings(max_flex_retries=1)
                 )
             )
         }
@@ -621,12 +625,14 @@ def test_flex_fallback_triggers_on_typed_transient_error_without_keyword_match(
     monkeypatch.setattr(engine, "_validate", lambda task: [])
 
     call_count = {"n": 0}
+    requested_tiers: list[str] = []
 
     def flaky_generate(request: ProviderRequest) -> object:
         call_count["n"] += 1
+        requested_tiers.append(request.role.service_tier)
         if call_count["n"] == 1:
             # Deliberately no "429"/"timeout"/"rate limit" substring -- only the
-            # exception type should be enough to trigger the fallback now.
+            # exception type should be enough to trigger the bounded retry.
             raise ProviderTransientError("upstream had a bad day")
         return real_patch_provider().generate(request)
 
@@ -635,8 +641,37 @@ def test_flex_fallback_triggers_on_typed_transient_error_without_keyword_match(
     state = engine.run_task(TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]))
 
     assert state.final_status == "completed"
-    assert state.tool_results["builder"]["tier"] == "standard"
+    assert state.tool_results["builder"]["tier"] == "flex"
+    assert set(requested_tiers) == {"flex"}
     assert call_count["n"] == 2
+
+
+def test_flex_unavailable_status_when_bounded_retries_exhausted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "old\n")
+    config = base_config(tmp_path).model_copy(
+        update={
+            "inference": InferenceSettings(
+                builder_service_tier=BuilderServiceTierSettings(
+                    flex=FlexTierSettings(max_flex_retries=0)
+                )
+            )
+        }
+    )
+    engine = WorkflowEngine(config)
+    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(
+        engine.openai_provider,
+        "generate",
+        lambda request: (_ for _ in ()).throw(ProviderTransientError("capacity exhausted")),
+    )
+
+    state = engine.run_task(TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]))
+
+    assert state.final_status == "flex_unavailable"
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old\n"
 
 
 # --- End-to-end fake-provider smoke test ---

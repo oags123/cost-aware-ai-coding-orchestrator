@@ -4,11 +4,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh"]
 Verbosity = Literal["low", "medium", "high"]
-ServiceTier = Literal["default", "flex", "priority", "batch"]
+ServiceTier = Literal["default", "flex", "priority", "batch", "fast"]
 BuilderExecutionBackend = Literal["role_provider"]
 
 LEGACY_MODEL_ALIAS_RENAMES = {
@@ -17,6 +17,27 @@ LEGACY_MODEL_ALIAS_RENAMES = {
 LEGACY_ROLE_RENAMES = {
     "ultra_cheap_classifier": "classification_worker",
 }
+
+# Roles reachable through automatic routing (WorkflowEngine._select_builder_role, or
+# a role name a future routing path could plausibly select without an explicit manual
+# override). Every role in this set is required to default to the Flex tier, declare
+# no automatic fallback tier, and have a verified "{role}:flex" pricing entry -- see
+# AppConfig._enforce_flex_only_policy. Roles NOT in this set (frontier_*, legacy_*,
+# emergency_pro_reviewer, non_reasoning_instruction_follower) are manual-override-only
+# by design and are exempt.
+AUTO_ROUTABLE_BUILDER_ROLES: frozenset[str] = frozenset(
+    {
+        "mechanical_worker",
+        "classification_worker",
+        "simple_builder",
+        "general_builder",
+        "coding_optimized_builder",
+    }
+)
+
+
+class FlexPolicyViolation(ValueError):
+    """Raised when configuration would violate the strict Flex-only execution policy."""
 
 
 class TimeoutSettings(BaseModel):
@@ -75,16 +96,19 @@ class LimitSettings(BaseModel):
 
 class FlexTierSettings(BaseModel):
     max_attempt_runtime_seconds: int = 600
-    max_consecutive_timeouts: int = 2
-    timeout_rate_threshold: float = 0.5
+    # Bounded retries on the flex tier itself after a transient error (timeout, rate
+    # limit, capacity). Tier NEVER changes across these retries -- there is no
+    # standard/default/priority/fast fallback. Once exhausted, the task ends with the
+    # "flex_unavailable" status rather than escalating to a higher-priced tier.
+    max_flex_retries: int = 2
 
 
 class BuilderServiceTierSettings(BaseModel):
-    default_tier: Literal["flex", "standard"] = "flex"
-    fallback_tier: Literal["flex", "standard"] = "standard"
+    # Automatic (non-manual-override) builder calls always request "flex". This field
+    # is intentionally a fixed Literal, not configurable to any other tier, so a
+    # non-flex automatic default cannot be introduced by editing config.yaml.
+    default_tier: Literal["flex"] = "flex"
     flex: FlexTierSettings = Field(default_factory=FlexTierSettings)
-    max_standard_fallbacks_per_run: int = 1
-    max_standard_fallback_cost_usd_per_run: float = 0.25
 
 
 class InferenceSettings(BaseModel):
@@ -246,23 +270,38 @@ class PricingSettings(BaseModel):
                 max_output_tokens=4000,
                 budget_pool="builder",
             ),
+            # coding_optimized_builder was retargeted from gpt-5.3-codex to
+            # gpt-5.4-mini because codex does not support Flex (live-verified
+            # 2026-08-07); pricing below matches gpt-5.4-mini's real per-token rates
+            # (identical to simple_builder/general_builder, same underlying model),
+            # not codex's rates.
+            "coding_optimized_builder:flex": ModelPricing(
+                provider="openai",
+                model="gpt-5.4-mini",
+                service_tier="flex",
+                input_usd_per_1m_tokens=0.375,
+                cached_input_usd_per_1m_tokens=0.0375,
+                output_usd_per_1m_tokens=2.25,
+                max_output_tokens=8000,
+                budget_pool="builder",
+            ),
             "coding_optimized_builder:default": ModelPricing(
                 provider="openai",
-                model="gpt-5.3-codex",
+                model="gpt-5.4-mini",
                 service_tier="default",
-                input_usd_per_1m_tokens=1.75,
-                cached_input_usd_per_1m_tokens=0.175,
-                output_usd_per_1m_tokens=14.0,
+                input_usd_per_1m_tokens=0.75,
+                cached_input_usd_per_1m_tokens=0.075,
+                output_usd_per_1m_tokens=4.5,
                 max_output_tokens=8000,
                 budget_pool="builder",
             ),
             "coding_optimized_builder:priority": ModelPricing(
                 provider="openai",
-                model="gpt-5.3-codex",
+                model="gpt-5.4-mini",
                 service_tier="priority",
-                input_usd_per_1m_tokens=3.5,
-                cached_input_usd_per_1m_tokens=0.35,
-                output_usd_per_1m_tokens=28.0,
+                input_usd_per_1m_tokens=1.5,
+                cached_input_usd_per_1m_tokens=0.15,
+                output_usd_per_1m_tokens=9.0,
                 max_output_tokens=8000,
                 budget_pool="builder",
             ),
@@ -503,7 +542,7 @@ class ModelRoleRegistry(BaseModel):
                 verbosity="low",
                 budget_pool="worker",
                 default_service_tier="flex",
-                fallback_service_tier="default",
+                fallback_service_tier=None,
             ),
             "classification_worker": ModelRoleSettings(
                 model_alias="openai_classifier_nano",
@@ -516,7 +555,7 @@ class ModelRoleRegistry(BaseModel):
                 allow_direct_patch=False,
                 budget_pool="worker",
                 default_service_tier="flex",
-                fallback_service_tier="default",
+                fallback_service_tier=None,
             ),
             "simple_builder": ModelRoleSettings(
                 model_alias="openai_mini",
@@ -528,7 +567,7 @@ class ModelRoleRegistry(BaseModel):
                 verbosity="low",
                 budget_pool="builder",
                 default_service_tier="flex",
-                fallback_service_tier="default",
+                fallback_service_tier=None,
             ),
             "general_builder": ModelRoleSettings(
                 model_alias="openai_mini",
@@ -540,21 +579,41 @@ class ModelRoleRegistry(BaseModel):
                 verbosity="medium",
                 budget_pool="builder",
                 default_service_tier="flex",
-                fallback_service_tier="default",
+                fallback_service_tier=None,
             ),
             "coding_optimized_builder": ModelRoleSettings(
-                model_alias="openai_codex",
-                purpose="coding-optimized patch generation when available",
+                # gpt-5.3-codex (openai_codex) does NOT support Flex -- live-verified
+                # 2026-08-07: the API rejects service_tier="flex" for this model with
+                # "Flex is not available for this model." Retargeted to gpt-5.4-mini
+                # (openai_mini), which is Flex-capable and already used by
+                # simple_builder/general_builder, so this role stays reachable through
+                # automatic routing under the strict Flex-only policy.
+                model_alias="openai_mini",
+                purpose=(
+                    "coding-optimized patch generation; retargeted from gpt-5.3-codex "
+                    "to gpt-5.4-mini because codex does not support Flex"
+                ),
                 max_input_tokens=64_000,
                 max_output_tokens=8_000,
-                max_context_chars=400_000,
+                max_context_chars=256_000,
                 reasoning_effort="medium",
                 verbosity="medium",
                 budget_pool="builder",
+                default_service_tier="flex",
+                fallback_service_tier=None,
             ),
             "frontier_coding_reviewer": ModelRoleSettings(
+                # gpt-5.3-codex does NOT support Flex (live-verified 2026-08-07). This
+                # role is intentionally kept on codex for its coding-specialized review
+                # quality, but is NEVER reachable through automatic routing (diagnosis
+                # is dry-run-only by default; see docs/COST_CONTROL.md) and requires an
+                # explicit manual service-tier override if ever invoked for real, since
+                # its only viable tier is "default", not "flex".
                 model_alias="openai_codex",
-                purpose="difficult coding diagnosis and risky multi-file patch review",
+                purpose=(
+                    "difficult coding diagnosis and risky multi-file patch review; "
+                    "manual-override-only, no Flex support, never auto-routed"
+                ),
                 max_input_tokens=128_000,
                 max_output_tokens=8_000,
                 max_context_chars=400_000,
@@ -598,8 +657,10 @@ class ModelRoleRegistry(BaseModel):
                 verbosity="medium",
                 allow_direct_patch=False,
                 budget_pool="emergency",
+                # Manual-approval-gated (never auto-routed), so exempt from the
+                # automatic Flex-only policy; still no automatic tier fallback.
                 default_service_tier="default",
-                fallback_service_tier="batch",
+                fallback_service_tier=None,
                 max_attempts=1,
                 manual_approval_required=True,
             ),
@@ -645,21 +706,11 @@ class ModelRoleRegistry(BaseModel):
     )
 
 
-class ServiceTierPolicySettings(BaseModel):
-    budget_optimization_enabled: bool = True
-    default_builder_tier: ServiceTier = "flex"
-    fallback_builder_tier: ServiceTier = "default"
-    priority_enabled: bool = False
-    max_flex_timeouts_before_fallback: int = 2
-    max_priority_cost_usd_per_run: float = 0.0
-
-
 class PolicySettings(BaseModel):
     allow_frontier_direct_patch: bool = False
     allow_xhigh_reasoning: bool = False
     allow_emergency_pro_reviewer: bool = False
     builder_execution_backend: BuilderExecutionBackend = "role_provider"
-    service_tiers: ServiceTierPolicySettings = Field(default_factory=ServiceTierPolicySettings)
 
 
 class ConfigResolutionError(ValueError):
@@ -722,6 +773,53 @@ class AppConfig(BaseModel):
     validation: ValidationSettings = Field(default_factory=ValidationSettings)
     tool_permissions: ToolPermissions = Field(default_factory=ToolPermissions)
     git: GitSettings = Field(default_factory=GitSettings)
+
+    @model_validator(mode="after")
+    def _enforce_flex_only_policy(self) -> AppConfig:
+        """Enforce the strict Flex-only execution policy as a real config-time
+        invariant, not merely a default: any AppConfig construction (from YAML or
+        directly in Python/tests) that would let an automatically-routable role run
+        outside Flex, fall back automatically to another tier, or route through a
+        model/tier combination without priced Flex support is rejected outright.
+        """
+        for role_name in AUTO_ROUTABLE_BUILDER_ROLES:
+            role = self.model_roles.roles.get(role_name)
+            if role is None:
+                continue
+            if role.default_service_tier != "flex":
+                raise FlexPolicyViolation(
+                    f"model role {role_name!r} is automatically routable but its "
+                    f"default_service_tier is {role.default_service_tier!r}, not "
+                    "'flex'. Automatically routed roles must default to Flex; use an "
+                    "explicit manual per-run override for any other tier."
+                )
+            if role.fallback_service_tier is not None:
+                raise FlexPolicyViolation(
+                    f"model role {role_name!r} declares "
+                    f"fallback_service_tier={role.fallback_service_tier!r}. Automatic "
+                    "tier fallback (Flex to Standard/Default/Priority/Fast) is not "
+                    "permitted -- remove fallback_service_tier from this role."
+                )
+            flex_key = f"{role_name}:flex"
+            if flex_key not in self.pricing.roles:
+                raise FlexPolicyViolation(
+                    f"model role {role_name!r} is automatically routable at the Flex "
+                    f"tier but has no {flex_key!r} pricing entry. Verified Flex "
+                    "pricing is required before a role can be auto-routed."
+                )
+        for pricing_key, pricing_entry in self.pricing.roles.items():
+            if ":" not in pricing_key:
+                continue
+            _, _, tier_suffix = pricing_key.rpartition(":")
+            if pricing_entry.service_tier is not None and pricing_entry.service_tier != tier_suffix:
+                raise FlexPolicyViolation(
+                    f"pricing entry {pricing_key!r} declares "
+                    f"service_tier={pricing_entry.service_tier!r}, which does not "
+                    f"match its own key suffix {tier_suffix!r}. The pricing table "
+                    "entry used for a call must match the tier actually requested -- "
+                    "a Flex call must never be priced using Standard/Default rates."
+                )
+        return self
 
 
 def _normalize_legacy_role_name(role_name: str) -> str:

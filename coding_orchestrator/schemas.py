@@ -20,6 +20,7 @@ FinalStatus = Literal[
     "timeout",
     "dry_run",
     "no_change",
+    "flex_unavailable",
 ]
 WorkflowName = Literal[
     "explain_code",

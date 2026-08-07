@@ -5,6 +5,55 @@ tests" to genuinely operational and safe for real-world use. It follows on from 
 pre-release audit that found the engineering quality was solid (tests/lint/type-check all
 green) but several load-bearing safety and correctness invariants were violated by default.
 
+## Strict Flex-only execution policy (later addition)
+
+A follow-up requirement made cost predictability an explicit, enforced invariant: every
+automatically routed OpenAI call must request the `flex` service tier, with **no
+automatic fallback** to Standard/Default/Priority/Fast under any circumstance.
+
+- `AppConfig._enforce_flex_only_policy` (a pydantic `model_validator`) rejects, at
+  config-load time, any configuration where an automatically-routable role
+  (`mechanical_worker`, `classification_worker`, `simple_builder`, `general_builder`,
+  `coding_optimized_builder`) doesn't default to Flex, declares a `fallback_service_tier`,
+  or lacks a verified `{role}:flex` pricing entry -- or where a pricing table entry's
+  declared tier doesn't match its own key suffix.
+- `BuilderServiceTierPolicy` (`orchestrator/tier_policy.py`) was rewritten: the old
+  `fallback_tier`/`activate_fallback()`/`should_fallback()` mechanism is gone entirely,
+  replaced by bounded, Flex-only retries (`max_flex_retries`) and a
+  `mark_flex_unavailable()` state. There is no code path left in the engine that can
+  select a non-Flex tier automatically.
+- New terminal status `flex_unavailable`: once bounded Flex-only retries are exhausted,
+  the task ends with this status (not an escalation to a pricier tier), the repository
+  is rolled back exactly as on any other failure, and the message explicitly states no
+  higher-priced tier was used.
+- New `ServiceTierMismatchError`: if the provider ever reports back a tier other than
+  what was requested, the response is never accepted as a normal success -- the task is
+  `blocked` and the discrepancy is recorded (`tool_results.service_tier_mismatch`).
+- **`gpt-5.3-codex` does not support Flex** -- live-verified against the real OpenAI API
+  (2026-08-07): a `service_tier="flex"` request is rejected with `"Flex is not available
+  for this model."` `coding_optimized_builder` (previously codex) was retargeted to
+  `gpt-5.4-mini`, with pricing corrected to match. `frontier_coding_reviewer` intentionally
+  keeps codex but is manual-override-only and was never reachable through automatic
+  routing to begin with.
+- New explicit, per-run, logged manual override: `--allow-non-flex-tier
+  {default,priority,batch,fast}` on the CLI (`manual_service_tier_override=` on
+  `WorkflowEngine` directly). Never settable via config inheritance; always printed to
+  stdout and written to the JSONL log when active.
+- Budget ledger gained `requested_service_tier`, `actual_service_tier`, and
+  `fallback_occurred` columns, populated on every reconciled call.
+- Removed dead, unused `ServiceTierPolicySettings`/`policies.service_tiers` config (it
+  was never wired to any actual behavior -- a genuine pre-existing footgun, since it
+  looked like it controlled fallback behavior but silently didn't).
+- 21 new regression tests in `tests/test_flex_only_policy.py` plus updates to
+  `tests/test_tier_policy.py`/`tests/test_model_roles_config.py` covering: every
+  auto-routed role uses Flex, no silent fallback (by construction and by test), Flex
+  timeout preserves repository state exactly, `flex_unavailable` accuracy, pricing
+  always resolves to the Flex entry, non-Flex models can't be auto-routed, the manual
+  override is explicit/visible/logged, and the ledger records requested/actual tiers.
+  Live-verified against the real API: `gpt-5.3-codex` flex rejection, and a real
+  `mechanical_worker`/`gpt-5.4-nano` call confirming `service_tier="flex"` end-to-end
+  with reconciled actual cost.
+
 ## Critical defects fixed
 
 **A disabled/misconfigured provider was silently reported as a successfully completed

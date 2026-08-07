@@ -29,16 +29,26 @@ def init_repo(path: Path) -> None:
 
 
 def pricing(output_tokens: int = 1000) -> PricingSettings:
+    # Every automatically-routable role needs a "{role}:flex" pricing entry, or
+    # AppConfig's strict Flex-only policy validator rejects construction.
     return PricingSettings(
         roles={
-            "simple_builder:flex": ModelPricing(
+            f"{role}:flex": ModelPricing(
                 provider="test",
                 model="builder",
+                service_tier="flex",
                 inference_tier="flex",
                 input_usd_per_1m_tokens=1.0,
                 output_usd_per_1m_tokens=2.0,
                 max_output_tokens=output_tokens,
                 budget_pool="builder",
+            )
+            for role in (
+                "mechanical_worker",
+                "classification_worker",
+                "simple_builder",
+                "general_builder",
+                "coding_optimized_builder",
             )
         }
     )

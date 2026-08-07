@@ -37,14 +37,20 @@ def test_default_openai_model_roles_are_configured() -> None:
     assert mechanical.reasoning_effort == "low"
     assert mechanical.verbosity == "low"
     assert mechanical.default_service_tier == "flex"
-    assert mechanical.fallback_service_tier == "default"
+    assert mechanical.fallback_service_tier is None
 
     reviewer = config.model_roles.roles["frontier_reviewer"]
     assert reviewer.model_alias == "openai_frontier"
     assert not reviewer.allow_direct_patch
     assert reviewer.budget_pool == "reviewer"
     assert config.model_roles.roles["general_builder"].model_alias == "openai_mini"
-    assert config.model_roles.roles["coding_optimized_builder"].model_alias == "openai_codex"
+    # coding_optimized_builder was retargeted from gpt-5.3-codex (openai_codex) to
+    # gpt-5.4-mini (openai_mini) because codex does not support Flex.
+    assert config.model_roles.roles["coding_optimized_builder"].model_alias == "openai_mini"
+    assert config.model_roles.roles["coding_optimized_builder"].default_service_tier == "flex"
+    # frontier_coding_reviewer intentionally stays on codex: manual-override-only,
+    # never auto-routed.
+    assert config.model_roles.roles["frontier_coding_reviewer"].model_alias == "openai_codex"
     assert config.model_roles.roles["emergency_pro_reviewer"].manual_approval_required
 
 
@@ -71,9 +77,14 @@ def test_default_openai_pricing_includes_source_metadata() -> None:
     assert reviewer_priority.service_tier == "priority"
     assert reviewer_priority.input_usd_per_1m_tokens == 12.5
     assert reviewer_priority.output_usd_per_1m_tokens == 75.0
-    assert config.pricing.roles["coding_optimized_builder:default"].model == "gpt-5.3-codex"
+    # coding_optimized_builder was retargeted to gpt-5.4-mini (Flex-capable); its
+    # pricing must reflect gpt-5.4-mini's real rates, not gpt-5.3-codex's.
+    coding_flex = config.pricing.roles["coding_optimized_builder:flex"]
+    assert coding_flex.model == "gpt-5.4-mini"
+    assert coding_flex.service_tier == "flex"
+    assert config.pricing.roles["coding_optimized_builder:default"].model == "gpt-5.4-mini"
     assert (
-        config.pricing.roles["coding_optimized_builder:priority"].output_usd_per_1m_tokens == 28.0
+        config.pricing.roles["coding_optimized_builder:priority"].output_usd_per_1m_tokens == 9.0
     )
     assert (
         config.pricing.roles[
@@ -108,10 +119,12 @@ def test_role_budgets_and_service_tier_policy_defaults() -> None:
     assert config.policies.allow_xhigh_reasoning is False
     assert config.policies.allow_emergency_pro_reviewer is False
     assert config.policies.builder_execution_backend == "role_provider"
-    assert config.policies.service_tiers.budget_optimization_enabled is True
-    assert config.policies.service_tiers.default_builder_tier == "flex"
-    assert config.policies.service_tiers.fallback_builder_tier == "default"
-    assert config.policies.service_tiers.priority_enabled is False
+    # Dead/unused ServiceTierPolicySettings (policies.service_tiers) was removed --
+    # it was never wired to any actual tier-selection behavior. The real,
+    # enforced Flex-only invariant lives in BuilderServiceTierSettings
+    # (config.inference.builder_service_tier) and AppConfig's flex-policy validator.
+    assert not hasattr(config.policies, "service_tiers")
+    assert config.inference.builder_service_tier.default_tier == "flex"
 
 
 def test_load_config_parses_custom_model_role(tmp_path: Path) -> None:
@@ -145,15 +158,14 @@ model_roles:
       allow_tools: false
       allow_direct_patch: false
       budget_pool: worker
-      default_service_tier: default
-      fallback_service_tier: flex
+      default_service_tier: flex
       max_attempts: 1
 pricing:
   roles:
-    "mechanical_worker:default":
+    "mechanical_worker:flex":
       provider: openai
       model: gpt-5.4-nano
-      service_tier: default
+      service_tier: flex
       input_usd_per_1m_tokens: 0.2
       cached_input_usd_per_1m_tokens: 0.02
       output_usd_per_1m_tokens: 1.25
@@ -170,9 +182,10 @@ pricing:
     role = config.model_roles.roles["mechanical_worker"]
     assert role.model_alias == "openai_nano"
     assert role.reasoning_effort == "low"
-    assert role.default_service_tier == "default"
+    assert role.default_service_tier == "flex"
+    assert role.fallback_service_tier is None
     assert role.max_attempts == 1
-    assert config.pricing.roles["mechanical_worker:default"].cached_input_usd_per_1m_tokens == 0.02
+    assert config.pricing.roles["mechanical_worker:flex"].cached_input_usd_per_1m_tokens == 0.02
 
 
 def test_load_config_normalizes_legacy_classifier_names(tmp_path: Path) -> None:
@@ -198,7 +211,6 @@ model_roles:
       allow_direct_patch: false
       budget_pool: worker
       default_service_tier: flex
-      fallback_service_tier: default
       max_attempts: 2
 budget:
   role_budgets_usd:
@@ -298,10 +310,14 @@ def test_openai_provider_requires_env_api_key(monkeypatch: pytest.MonkeyPatch) -
 
 def test_codex_role_uses_request_level_reasoning_effort() -> None:
     config = AppConfig()
+    # coding_optimized_builder was retargeted to gpt-5.4-mini because gpt-5.3-codex
+    # does not support Flex; frontier_coding_reviewer intentionally stays on codex
+    # since it's manual-override-only and never auto-routed.
     role = resolve_model_role(config, "coding_optimized_builder")
     reviewer_role = resolve_model_role(config, "frontier_coding_reviewer")
 
-    assert role.model == "gpt-5.3-codex"
+    assert role.model == "gpt-5.4-mini"
+    assert role.service_tier == "flex"
     assert role.reasoning_effort == "medium"
     assert reviewer_role.model == "gpt-5.3-codex"
     assert reviewer_role.reasoning_effort == "high"
@@ -313,7 +329,7 @@ def test_frontier_pro_requires_manual_approval_and_priority_disabled() -> None:
 
     assert emergency.model_alias == "openai_frontier_pro"
     assert emergency.manual_approval_required
-    assert config.policies.service_tiers.priority_enabled is False
+    assert emergency.fallback_service_tier is None
 
 
 def test_cached_input_none_is_distinct_from_zero() -> None:

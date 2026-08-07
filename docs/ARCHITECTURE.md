@@ -9,7 +9,8 @@
 - `orchestrator/engine.py`: bounded workflow controller.
 - `orchestrator/budget.py`: pre-call estimates + SQLite ledger + budget gates.
 - `orchestrator/limits.py`: hard context/output/patch/stdout/stderr limits.
-- `orchestrator/tier_policy.py`: flex/default fallback policy.
+- `orchestrator/tier_policy.py`: strict Flex-only policy with bounded, Flex-only
+  retries (no fallback tier).
 - `models/provider.py`: provider request/response contracts.
 - `models/openai_provider.py`: OpenAI Responses API integration.
 - `models/fake_provider.py`: deterministic test provider.

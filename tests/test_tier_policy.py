@@ -50,9 +50,11 @@ def real_patch_provider() -> FakeModelProvider:
 
 
 def pricing(output_tokens: int = 100) -> PricingSettings:
+    # Every automatically-routable role needs a "{role}:flex" pricing entry, or
+    # AppConfig's strict Flex-only policy validator rejects construction.
     return PricingSettings(
         roles={
-            "simple_builder:flex": ModelPricing(
+            f"{role}:flex": ModelPricing(
                 provider="openai",
                 model="gpt-5.4-mini",
                 inference_tier="flex",
@@ -61,17 +63,14 @@ def pricing(output_tokens: int = 100) -> PricingSettings:
                 output_usd_per_1m_tokens=2.25,
                 max_output_tokens=output_tokens,
                 budget_pool="builder",
-            ),
-            "simple_builder:default": ModelPricing(
-                provider="openai",
-                model="gpt-5.4-mini",
-                inference_tier="default",
-                service_tier="default",
-                input_usd_per_1m_tokens=0.75,
-                output_usd_per_1m_tokens=4.50,
-                max_output_tokens=output_tokens,
-                budget_pool="builder",
-            ),
+            )
+            for role in (
+                "mechanical_worker",
+                "classification_worker",
+                "simple_builder",
+                "general_builder",
+                "coding_optimized_builder",
+            )
         }
     )
 
@@ -114,28 +113,33 @@ def test_flex_selected_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert state.final_status == "completed"
     assert state.tool_results["builder"]["tier"] == "flex"
     assert state.tool_results["builder"]["service_tier"] == "flex"
+    assert state.tool_results["requested_service_tier"] == "flex"
+    assert state.tool_results["actual_service_tier"] == "flex"
+    assert state.tool_results["manual_service_tier_override"] is False
 
 
-def test_default_service_tier_fallback_after_flex_timeout_threshold(
+def test_flex_transient_error_retries_on_flex_only_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # A transient Flex error must trigger a bounded retry that stays on Flex --
+    # never a switch to any other tier.
     init_repo(tmp_path)
     engine = WorkflowEngine(
         config(
             tmp_path,
-            BuilderServiceTierSettings(
-                flex=FlexTierSettings(max_consecutive_timeouts=1, timeout_rate_threshold=1.0)
-            ),
+            BuilderServiceTierSettings(flex=FlexTierSettings(max_flex_retries=2)),
         )
     )
     monkeypatch.setattr(engine, "_validate", lambda task: [])
     monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     call_count = {"n": 0}
+    requested_tiers: list[str] = []
 
     def flaky_generate(request: ProviderRequest):  # type: ignore[no-untyped-def]
         call_count["n"] += 1
+        requested_tiers.append(request.role.service_tier)
         if call_count["n"] == 1:
             raise ProviderError("429 resource unavailable on flex tier")
         return real_patch_provider().generate(request)
@@ -143,18 +147,17 @@ def test_default_service_tier_fallback_after_flex_timeout_threshold(
     monkeypatch.setattr(engine.openai_provider, "generate", flaky_generate)
 
     state = engine.run_task(
-        TaskSpec(id="T-STANDARD", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
+        TaskSpec(id="T-RETRY", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
     )
 
     assert state.final_status == "completed"
-    assert state.tool_results["builder"]["tier"] == "standard"
-    assert state.tool_results["builder"]["service_tier"] == "default"
-    report = engine.budget_report()
-    assert report.service_tier_timeouts.get("flex", 0) == 1
-    assert report.service_tier_fallbacks == 1
+    assert state.tool_results["builder"]["tier"] == "flex"
+    assert state.tool_results["builder"]["service_tier"] == "flex"
+    assert set(requested_tiers) == {"flex"}  # every attempt requested Flex, no exceptions
+    assert call_count["n"] == 2
 
 
-def test_default_fallback_blocked_by_cost_budget(
+def test_flex_unavailable_after_bounded_retries_exhausted_preserves_repo(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -162,54 +165,35 @@ def test_default_fallback_blocked_by_cost_budget(
     engine = WorkflowEngine(
         config(
             tmp_path,
-            BuilderServiceTierSettings(
-                flex=FlexTierSettings(max_consecutive_timeouts=1),
-                max_standard_fallback_cost_usd_per_run=0.000001,
-            ),
+            BuilderServiceTierSettings(flex=FlexTierSettings(max_flex_retries=1)),
         )
     )
+    monkeypatch.setattr(engine, "_validate", lambda task: [])
 
-    monkeypatch.setattr(
-        engine.openai_provider,
-        "generate",
-        lambda request: (_ for _ in ()).throw(ProviderError("timeout on flex request")),
-    )
+    requested_tiers: list[str] = []
 
-    state = engine.run_task(
-        TaskSpec(id="T-COST", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
-    )
+    def always_flaky(request: ProviderRequest):  # type: ignore[no-untyped-def]
+        requested_tiers.append(request.role.service_tier)
+        raise ProviderError("429 resource unavailable on flex tier")
 
-    assert state.final_status == "blocked"
-    assert "service tier fallback cost budget" in state.validation_results["budget"]["message"]
-
-
-def test_default_fallback_blocked_by_count_limit(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    init_repo(tmp_path)
-    engine = WorkflowEngine(
-        config(
-            tmp_path,
-            BuilderServiceTierSettings(
-                flex=FlexTierSettings(max_consecutive_timeouts=1),
-                max_standard_fallbacks_per_run=0,
-            ),
-        )
-    )
-
-    monkeypatch.setattr(
-        engine.openai_provider,
-        "generate",
-        lambda request: (_ for _ in ()).throw(ProviderError("timeout on flex request")),
-    )
+    monkeypatch.setattr(engine.openai_provider, "generate", always_flaky)
 
     state = engine.run_task(
-        TaskSpec(id="T-COUNT", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
+        TaskSpec(id="T-UNAVAILABLE", title="Fix bug", max_cost_usd=10, allowed_files=["app.py"])
     )
 
-    assert state.final_status == "blocked"
-    assert "service tier fallback limit" in state.validation_results["budget"]["message"]
+    assert state.final_status == "flex_unavailable"
+    assert set(requested_tiers) == {"flex"}
+    # max_flex_retries=1 -> 2 total attempts (initial + 1 retry), never more, never a
+    # different tier.
+    assert len(requested_tiers) == 2
+    assert "No higher-priced tier was used" in state.validation_results["service_tier"]["message"]
+    # Repository preserved exactly: no patch was ever applied, nothing to roll back.
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old\n"
+    status = subprocess.run(
+        ["git", "status", "--short"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout
+    assert "app.py" not in status
 
 
 def test_report_includes_service_tier_usage(
@@ -229,3 +213,6 @@ def test_report_includes_service_tier_usage(
 
     assert report.calls_by_service_tier["flex"] == 1
     assert report.estimated_cost_by_service_tier_usd["flex"] > 0
+    # Automatic fallback is structurally impossible under the strict Flex-only
+    # policy -- this must always be exactly 0.
+    assert report.service_tier_fallbacks == 0

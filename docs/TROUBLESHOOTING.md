@@ -15,6 +15,26 @@
   returned. Non-modifying workflows (`explain_code`, `architecture_review`,
   `security_review`) are exempt and can legitimately report `completed` with zero changes.
 
+## Task reported `flex_unavailable`
+
+- OpenAI's Flex tier was requested and, after bounded Flex-only retries
+  (`inference.builder_service_tier.flex.max_flex_retries`, default 2), never
+  succeeded. This is a deliberate pause, not an error to "fix" -- **no higher-priced
+  tier was used automatically**, and the repository is left exactly as it was before
+  the task started. Options: retry later when Flex capacity may be available, increase
+  `max_flex_retries`, or -- only if you deliberately accept Standard/Priority/Fast
+  pricing for this one run -- pass `--allow-non-flex-tier {default,priority,batch,fast}`.
+  See [Cost Control](COST_CONTROL.md).
+
+## Task reported `blocked` with a `service_tier` mismatch message
+
+- The provider reported back a different service tier than what was requested (e.g.
+  Flex was requested but the response wasn't Flex). Under the strict Flex-only policy
+  this is never silently accepted as a successful call -- check
+  `tool_results.service_tier_mismatch` for the requested vs. actual tier, and confirm
+  nothing else (a manual override, a config change) is affecting tier selection
+  unexpectedly.
+
 ## Task reported `blocked` with "another orchestrator run holds the lock"
 
 - Only one orchestrator run is allowed against a given repository at a time. Wait for the

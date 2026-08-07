@@ -123,10 +123,19 @@ class BudgetLedger:
         actual_output_tokens: int,
         actual_cost_usd: float,
         status: str = "completed",
+        requested_service_tier: str | None = None,
+        actual_service_tier: str | None = None,
+        fallback_occurred: bool = False,
     ) -> None:
         """Idempotently true-up the most recent un-reconciled estimate row for this
         call with real provider usage. Updates in place (never inserts a new row) so
         actual spend is never double-counted alongside its originating estimate.
+
+        `requested_service_tier`/`actual_service_tier` record exactly what tier was
+        asked for versus what the provider reported back, and `fallback_occurred` is
+        always False under the strict Flex-only policy (there is no automatic
+        fallback mechanism left to set it) -- its presence lets a ledger reader
+        positively confirm no fallback ever happened, rather than merely assuming it.
         """
         with self._connect() as conn:
             row = conn.execute(
@@ -145,10 +154,21 @@ class BudgetLedger:
                 """
                 UPDATE budget_events
                 SET actual_input_tokens = ?, actual_output_tokens = ?,
-                    actual_cost_usd = ?, status = ?
+                    actual_cost_usd = ?, status = ?,
+                    requested_service_tier = ?, actual_service_tier = ?,
+                    fallback_occurred = ?
                 WHERE id = ?
                 """,
-                (actual_input_tokens, actual_output_tokens, actual_cost_usd, status, row[0]),
+                (
+                    actual_input_tokens,
+                    actual_output_tokens,
+                    actual_cost_usd,
+                    status,
+                    requested_service_tier,
+                    actual_service_tier,
+                    int(fallback_occurred),
+                    row[0],
+                ),
             )
 
     def spend_for_project(self, project_id: str) -> float:
@@ -322,6 +342,17 @@ class BudgetLedger:
                 )
             if "inference_tier" not in columns:
                 conn.execute("ALTER TABLE budget_events ADD COLUMN inference_tier TEXT")
+            if "requested_service_tier" not in columns:
+                conn.execute(
+                    "ALTER TABLE budget_events ADD COLUMN requested_service_tier TEXT"
+                )
+            if "actual_service_tier" not in columns:
+                conn.execute("ALTER TABLE budget_events ADD COLUMN actual_service_tier TEXT")
+            if "fallback_occurred" not in columns:
+                conn.execute(
+                    "ALTER TABLE budget_events ADD COLUMN fallback_occurred "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
 
     def _sum(self, where_clause: str, params: tuple[str, ...]) -> float:
         with self._connect() as conn:
@@ -439,6 +470,10 @@ class BudgetGuard:
         estimate: BudgetEstimate,
         usage: ModelUsage,
         status: str = "completed",
+        *,
+        requested_service_tier: str | None = None,
+        actual_service_tier: str | None = None,
+        fallback_occurred: bool = False,
     ) -> None:
         """Reconcile real provider token usage/cost into the ledger for the call
         this estimate was made for. Safe to call at most once per attempt; a repeat
@@ -457,6 +492,9 @@ class BudgetGuard:
             actual_output_tokens=usage.output_tokens,
             actual_cost_usd=input_cost + output_cost,
             status=status,
+            requested_service_tier=requested_service_tier,
+            actual_service_tier=actual_service_tier,
+            fallback_occurred=fallback_occurred,
         )
 
     def report(

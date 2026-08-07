@@ -15,12 +15,14 @@ from coding_orchestrator.config import (
 from coding_orchestrator.models import OpenAIProvider
 from coding_orchestrator.models.provider import (
     BuilderOutput,
+    FlexUnavailableError,
     ModelProvider,
     ProviderConfigurationError,
     ProviderError,
     ProviderRequest,
     ProviderResponse,
     ProviderTransientError,
+    ServiceTierMismatchError,
 )
 from coding_orchestrator.models.router import ModelRouter
 from coding_orchestrator.observability.logger import JsonlLogger
@@ -76,10 +78,12 @@ class WorkflowEngine:
         self,
         config: AppConfig,
         provider_overrides: dict[str, ModelProvider] | None = None,
+        manual_service_tier_override: ServiceTier | None = None,
     ) -> None:
         self.config = config
         self.repo_path = Path(config.repo_path).resolve()
         self.provider_overrides = provider_overrides or {}
+        self.manual_service_tier_override = manual_service_tier_override
         self.openai_provider = OpenAIProvider(config.providers.openai)
         self.classifier = TaskClassifier()
         self.model_router = ModelRouter(config.model_routing)
@@ -98,6 +102,20 @@ class WorkflowEngine:
         state_path = self._resolve_repo_path(config.state_path)
         escalations_path = self._resolve_repo_path(config.escalations_path)
         self.logger = JsonlLogger(log_path)
+        if self.manual_service_tier_override is not None:
+            # Explicit, per-run, and loud: this can only be set by a caller that
+            # deliberately opted in for this one run (e.g. a CLI flag), never by
+            # config inheritance or any fallback/retry logic.
+            self.logger.log(
+                "manual_service_tier_override_active",
+                override_tier=self.manual_service_tier_override,
+                warning=(
+                    f"MANUAL OVERRIDE: this run will use service_tier="
+                    f"{self.manual_service_tier_override!r} instead of the mandatory "
+                    "Flex tier for automatically routed calls. This was explicitly "
+                    "requested for this run only."
+                ),
+            )
         self.telegram = TelegramNotifier(config.telegram, budget_settings)
         self.state_store = StateStore(state_path)
         self.escalation = EscalationManager(escalations_path)
@@ -261,6 +279,31 @@ class WorkflowEngine:
             }
             self._record_limit_failure(state, exc.status)
             return self._finish(state, exc.status)
+        except FlexUnavailableError as exc:
+            state.final_status = "flex_unavailable"
+            validation_errors.append(str(exc))
+            self._rollback_if_checkpoint(checkpoint)
+            state.validation_results["service_tier"] = {
+                "name": "service_tier",
+                "passed": False,
+                "message": (
+                    f"{exc} No higher-priced tier was used; this run stayed on Flex "
+                    "only, as required."
+                ),
+                "details": state.tool_results.get("builder_flex_transient_error", {}),
+            }
+            return self._finish(state, "task_flex_unavailable")
+        except ServiceTierMismatchError as exc:
+            state.final_status = "blocked"
+            validation_errors.append(str(exc))
+            self._rollback_if_checkpoint(checkpoint)
+            state.validation_results["service_tier"] = {
+                "name": "service_tier",
+                "passed": False,
+                "message": str(exc),
+                "details": state.tool_results.get("service_tier_mismatch", {}),
+            }
+            return self._finish(state, "task_service_tier_mismatch")
         except Exception as exc:
             state.final_status = "failed"
             validation_errors.append(str(exc))
@@ -316,7 +359,10 @@ class WorkflowEngine:
             largest_stderr_bytes=metrics.largest_stderr_bytes,
             largest_validation_output_bytes=metrics.largest_validation_output_bytes,
             service_tier_timeouts=dict(self.tier_policy.state.service_tier_timeouts),
-            service_tier_fallbacks=self.tier_policy.state.service_tier_fallbacks,
+            # Automatic tier fallback is structurally impossible under the strict
+            # Flex-only policy -- this is always 0, which a report can point to as
+            # positive evidence no fallback ever occurred.
+            service_tier_fallbacks=0,
         )
 
     def convergence_report(self) -> dict[str, object]:
@@ -365,8 +411,7 @@ class WorkflowEngine:
         try:
             context = self.limits.prepare_context(context)
         except LimitExceeded:
-            tier = self.tier_policy.select_tier()
-            service_tier = self._service_tier_for_policy_tier(tier)
+            service_tier = self._effective_service_tier()
             role_name = self._select_builder_role(task, state)
             role = resolve_model_role(self.config, role_name, service_tier=service_tier)
             pricing = self.budget.pricing_for_role(role_name, service_tier)
@@ -422,36 +467,42 @@ class WorkflowEngine:
     ) -> BuilderResult:
         return self._run_role_builder(task, state, context)
 
+    def _effective_service_tier(self) -> ServiceTier:
+        """The tier automatic builder calls will request this run. Always "flex"
+        unless an explicit, per-run manual override was passed to the constructor --
+        never selected by config inheritance or any fallback/retry logic.
+        """
+        return self.manual_service_tier_override or "flex"
+
     def _run_role_builder(
         self,
         task: TaskSpec,
         state: OrchestratorState,
         context: str,
     ) -> BuilderResult:
+        requested_service_tier = self._effective_service_tier()
+        is_manual_override = self.manual_service_tier_override is not None
         while True:
-            tier = self.tier_policy.select_tier()
-            service_tier = self._service_tier_for_policy_tier(tier)
             role_name = self._select_builder_role(task, state)
-            role = resolve_model_role(self.config, role_name, service_tier=service_tier)
+            role = resolve_model_role(self.config, role_name, service_tier=requested_service_tier)
+            if not is_manual_override and role.service_tier != "flex":
+                # Defense in depth: AppConfig._enforce_flex_only_policy should already
+                # make this unreachable, but a strict runtime invariant costs nothing.
+                raise ProviderConfigurationError(
+                    f"strict Flex-only policy violation: role {role_name!r} resolved "
+                    f"to service_tier={role.service_tier!r} without a manual override"
+                )
             estimate = self.budget.estimate_pre_call(
                 task=task,
                 attempt_id=state.retry_count + 1,
                 model_role=role_name,
                 context=context,
                 model_override=role.model,
-                inference_tier=service_tier,
+                inference_tier=requested_service_tier,
                 max_output_tokens_override=role.max_output_tokens,
             )
-            if tier == "standard":
-                try:
-                    self.tier_policy.check_fallback_budget(
-                        estimate.model_copy(update={"inference_tier": "standard"})
-                    )
-                except BudgetExceeded:
-                    self.budget.record_estimate(estimate, status="blocked")
-                    raise
             self._prepare_builder_call(task, state, estimate)
-            self.tier_policy.record_call(tier)
+            self.tier_policy.record_call(requested_service_tier)
             request = ProviderRequest(
                 role=role,
                 prompt=context,
@@ -459,13 +510,15 @@ class WorkflowEngine:
                 metadata={
                     "task_id": task.id,
                     "attempt_id": str(state.retry_count + 1),
-                    "policy_tier": tier,
-                    "service_tier": service_tier,
+                    "requested_service_tier": requested_service_tier,
+                    "manual_override": str(is_manual_override),
                     "provider": role.provider,
                     "model": role.model,
                 },
             )
             provider = self._provider_for_role(role)
+            state.tool_results["requested_service_tier"] = requested_service_tier
+            state.tool_results["manual_service_tier_override"] = is_manual_override
             try:
                 response = provider.generate(request)
             except ProviderConfigurationError as exc:
@@ -479,8 +532,8 @@ class WorkflowEngine:
                 )
                 state.selected_model = role.model
                 state.tool_results["builder_role"] = role_name
-                state.tool_results["builder_tier"] = tier
-                state.tool_results["builder_service_tier"] = service_tier
+                state.tool_results["builder_tier"] = requested_service_tier
+                state.tool_results["builder_service_tier"] = requested_service_tier
                 state.tool_results["builder_model"] = role.model
                 state.tool_results["builder_provider"] = role.provider
                 state.tool_results["builder_backend"] = "role_provider"
@@ -502,28 +555,67 @@ class WorkflowEngine:
                 is_transient = isinstance(
                     exc, ProviderTransientError
                 ) or self._is_flex_transient_error(str(exc))
-                is_flex_timeout = tier == "flex" and is_transient
-                if is_flex_timeout:
-                    self.tier_policy.record_timeout("flex")
-                    state.tool_results["builder_timeout"] = {
+                if requested_service_tier == "flex" and is_transient:
+                    self.tier_policy.record_transient_failure("flex")
+                    consecutive = self.tier_policy.state.consecutive_flex_transient_failures
+                    state.tool_results["builder_flex_transient_error"] = {
                         "service_tier": "flex",
                         "message": str(exc),
+                        "consecutive_failures": consecutive,
                     }
-                    if self.tier_policy.should_fallback():
-                        self.tier_policy.activate_fallback()
+                    self.logger.log(
+                        "flex_transient_error",
+                        request_id=state.request_id,
+                        task_id=task.id,
+                        attempt=consecutive,
+                        max_retries=self.tier_policy.settings.flex.max_flex_retries,
+                        error=str(exc),
+                    )
+                    if self.tier_policy.should_retry_flex():
+                        # Bounded retry: tier NEVER changes. Still requesting Flex.
                         continue
+                    self.tier_policy.mark_flex_unavailable()
+                    raise FlexUnavailableError(
+                        "Flex capacity exhausted after "
+                        f"{self.tier_policy.settings.flex.max_flex_retries} bounded "
+                        f"retries; no higher-priced tier was used. Last error: {exc}"
+                    ) from exc
                 raise
-            self.tier_policy.record_success(tier)
+            if response.service_tier != requested_service_tier:
+                state.tool_results["service_tier_mismatch"] = {
+                    "requested": requested_service_tier,
+                    "actual": response.service_tier,
+                }
+                self.logger.log(
+                    "service_tier_mismatch",
+                    request_id=state.request_id,
+                    task_id=task.id,
+                    requested=requested_service_tier,
+                    actual=response.service_tier,
+                )
+                raise ServiceTierMismatchError(
+                    f"requested service_tier={requested_service_tier!r} but provider "
+                    f"returned service_tier={response.service_tier!r}; refusing to "
+                    "treat this as a normal successful call"
+                )
+            self.tier_policy.record_success(requested_service_tier)
+            state.tool_results["actual_service_tier"] = response.service_tier
             state.selected_model = role.model
             state.tool_results["builder_role"] = role_name
-            state.tool_results["builder_tier"] = tier
-            state.tool_results["builder_service_tier"] = service_tier
+            state.tool_results["builder_tier"] = requested_service_tier
+            state.tool_results["builder_service_tier"] = requested_service_tier
             state.tool_results["builder_model"] = role.model
             state.tool_results["builder_provider"] = role.provider
             state.tool_results["builder_backend"] = "role_provider"
             state.tool_results["builder_request"] = request.model_dump()
             state.tool_results["builder_response_usage"] = response.usage.model_dump()
-            self.budget.record_actual(estimate, response.usage)
+            self.budget.record_actual(
+                estimate,
+                response.usage,
+                requested_service_tier=requested_service_tier,
+                actual_service_tier=response.service_tier,
+                fallback_occurred=False,
+            )
             return self._provider_response_to_builder_result(response)
 
     def _is_flex_transient_error(self, error_text: str) -> bool:
@@ -577,19 +669,6 @@ class WorkflowEngine:
         if state.complexity in {"trivial", "simple"} and len(task.allowed_files) <= 2:
             return "simple_builder"
         return "general_builder"
-
-    def _service_tier_for_policy_tier(self, tier: str) -> ServiceTier:
-        if tier == "standard":
-            return "default"
-        if tier == "default":
-            return "default"
-        if tier == "flex":
-            return "flex"
-        if tier == "priority":
-            return "priority"
-        if tier == "batch":
-            return "batch"
-        return "default"
 
     def _prepare_builder_call(
         self,

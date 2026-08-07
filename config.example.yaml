@@ -15,8 +15,9 @@ providers:
     base_url: null
     request_timeout_seconds: 300
     # SDK-level retries for transient errors (rate limits/timeouts/connection
-    # errors) before the orchestrator's own flex->default service-tier fallback
-    # is even considered. Conservative but non-zero by default.
+    # errors), all still on the Flex tier -- see inference.builder_service_tier
+    # below for the orchestrator's own bounded Flex-only retry policy on top of
+    # this. Conservative but non-zero by default.
     max_retries: 2
 
 model_aliases:
@@ -47,7 +48,7 @@ model_roles:
       allow_direct_patch: true
       budget_pool: worker
       default_service_tier: flex
-      fallback_service_tier: default
+      fallback_service_tier: null  # no automatic fallback -- Flex-only policy
       max_attempts: 2
       manual_approval_required: false
     classification_worker:
@@ -64,7 +65,7 @@ model_roles:
       allow_direct_patch: false
       budget_pool: worker
       default_service_tier: flex
-      fallback_service_tier: default
+      fallback_service_tier: null  # no automatic fallback -- Flex-only policy
       max_attempts: 2
       manual_approval_required: false
     simple_builder:
@@ -81,7 +82,7 @@ model_roles:
       allow_direct_patch: true
       budget_pool: builder
       default_service_tier: flex
-      fallback_service_tier: default
+      fallback_service_tier: null  # no automatic fallback -- Flex-only policy
       max_attempts: 2
       manual_approval_required: false
     general_builder:
@@ -98,30 +99,39 @@ model_roles:
       allow_direct_patch: true
       budget_pool: builder
       default_service_tier: flex
-      fallback_service_tier: default
+      fallback_service_tier: null  # no automatic fallback -- Flex-only policy
       max_attempts: 2
       manual_approval_required: false
     coding_optimized_builder:
+      # gpt-5.3-codex (openai_codex) does NOT support Flex -- live-verified
+      # 2026-08-07: the API rejects service_tier="flex" for this model with "Flex is
+      # not available for this model." Retargeted to gpt-5.4-mini (openai_mini),
+      # which is Flex-capable, so this role stays reachable through automatic
+      # routing under the strict Flex-only policy.
       provider: openai
-      model_alias: openai_codex
-      purpose: coding-optimized patch generation
+      model_alias: openai_mini
+      purpose: coding-optimized patch generation (retargeted from gpt-5.3-codex)
       max_input_tokens: 64000
       max_output_tokens: 8000
-      max_context_chars: 400000
+      max_context_chars: 256000
       reasoning_effort: medium
       verbosity: medium
       structured_output: true
       allow_tools: false
       allow_direct_patch: true
       budget_pool: builder
-      default_service_tier: default
+      default_service_tier: flex
       fallback_service_tier: null
       max_attempts: 2
       manual_approval_required: false
     frontier_coding_reviewer:
+      # gpt-5.3-codex does NOT support Flex (live-verified 2026-08-07). Kept on
+      # codex intentionally for its coding-specialized review quality, but this role
+      # is NEVER reachable through automatic routing and requires an explicit
+      # --allow-non-flex-tier manual override if ever invoked for real.
       provider: openai
       model_alias: openai_codex
-      purpose: difficult coding diagnosis
+      purpose: difficult coding diagnosis (manual-override-only, no Flex support)
       max_input_tokens: 128000
       max_output_tokens: 8000
       max_context_chars: 400000
@@ -182,8 +192,10 @@ model_roles:
       allow_tools: false
       allow_direct_patch: false
       budget_pool: emergency
+      # Manual-approval-gated (never auto-routed) -- exempt from the automatic
+      # Flex-only policy, but still no automatic tier fallback.
       default_service_tier: default
-      fallback_service_tier: batch
+      fallback_service_tier: null
       max_attempts: 1
       manual_approval_required: true
     legacy_reasoning_fallback:
@@ -243,13 +255,8 @@ policies:
   allow_xhigh_reasoning: false
   allow_emergency_pro_reviewer: false
   builder_execution_backend: role_provider
-  service_tiers:
-    budget_optimization_enabled: true
-    default_builder_tier: flex
-    fallback_builder_tier: default
-    priority_enabled: false
-    max_flex_timeouts_before_fallback: 2
-    max_priority_cost_usd_per_run: 0.0
+  # (The strict Flex-only tier policy itself lives in inference.builder_service_tier
+  # below and is enforced by AppConfig's config-time validator, not here.)
 
 model_routing:
   trivial: deterministic
@@ -307,14 +314,16 @@ limits:
 
 inference:
   builder_service_tier:
+    # Fixed at "flex" -- not configurable to any other tier. Automatically routed
+    # calls always request Flex; there is no fallback tier field left to set.
     default_tier: flex
-    fallback_tier: standard
     flex:
       max_attempt_runtime_seconds: 600
-      max_consecutive_timeouts: 2
-      timeout_rate_threshold: 0.5
-    max_standard_fallbacks_per_run: 1
-    max_standard_fallback_cost_usd_per_run: 0.25
+      # Bounded Flex-only retries on a transient error (timeout, rate limit,
+      # capacity). Every retry still requests Flex. Once exhausted, the task ends
+      # with final_status "flex_unavailable" -- never an automatic switch to a
+      # higher-priced tier.
+      max_flex_retries: 2
 
 convergence:
   max_stagnant_attempts: 2
@@ -492,24 +501,39 @@ pricing:
       budget_pool: builder
       source_url: https://developers.openai.com/api/docs/pricing
       retrieved_or_verified_date: "2026-05-11"
+    # coding_optimized_builder was retargeted from gpt-5.3-codex to gpt-5.4-mini
+    # because codex does not support Flex (live-verified 2026-08-07); pricing below
+    # matches gpt-5.4-mini's real per-token rates (identical to
+    # simple_builder/general_builder, same underlying model), not codex's rates.
+    "coding_optimized_builder:flex":
+      provider: openai
+      model: gpt-5.4-mini
+      service_tier: flex
+      input_usd_per_1m_tokens: 0.375
+      cached_input_usd_per_1m_tokens: 0.0375
+      output_usd_per_1m_tokens: 2.25
+      max_output_tokens: 8000
+      budget_pool: builder
+      source_url: https://developers.openai.com/api/docs/pricing
+      retrieved_or_verified_date: "2026-05-11"
     "coding_optimized_builder:default":
       provider: openai
-      model: gpt-5.3-codex
+      model: gpt-5.4-mini
       service_tier: default
-      input_usd_per_1m_tokens: 1.75
-      cached_input_usd_per_1m_tokens: 0.175
-      output_usd_per_1m_tokens: 14.00
+      input_usd_per_1m_tokens: 0.75
+      cached_input_usd_per_1m_tokens: 0.075
+      output_usd_per_1m_tokens: 4.50
       max_output_tokens: 8000
       budget_pool: builder
       source_url: https://developers.openai.com/api/docs/pricing
       retrieved_or_verified_date: "2026-05-11"
     "coding_optimized_builder:priority":
       provider: openai
-      model: gpt-5.3-codex
+      model: gpt-5.4-mini
       service_tier: priority
-      input_usd_per_1m_tokens: 3.50
-      cached_input_usd_per_1m_tokens: 0.35
-      output_usd_per_1m_tokens: 28.00
+      input_usd_per_1m_tokens: 1.50
+      cached_input_usd_per_1m_tokens: 0.15
+      output_usd_per_1m_tokens: 9.00
       max_output_tokens: 8000
       budget_pool: builder
       source_url: https://developers.openai.com/api/docs/pricing

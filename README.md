@@ -37,8 +37,8 @@ Local Python orchestrator for bounded coding workflows with strict safety gates.
 ## Task Outcomes
 
 A task's `final_status` is one of: `completed`, `dry_run`, `no_change`, `blocked`,
-`escalated`, `failed`, `timeout`, or `skipped`. Only `completed` means a real model call
-produced a validated, committed change. In particular:
+`escalated`, `failed`, `timeout`, `flex_unavailable`, or `skipped`. Only `completed` means
+a real model call produced a validated, committed change. In particular:
 
 - `dry_run` — the provider was disabled, misconfigured, or missing credentials; no model
   was called and nothing changed. This used to be silently reported as `completed`; it no
@@ -47,19 +47,29 @@ produced a validated, committed change. In particular:
   whose workflow requires a modification (`explain_code`/`architecture_review`/
   `security_review` are exempt, since they're not expected to change files).
 - `blocked` — budget, limit, human-approval, or concurrent-execution-lock gate tripped
-  before/without ever calling a model.
+  before/without ever calling a model. Also used when a provider returns a service tier
+  other than what was requested (see "Service Tier Policy").
+- `flex_unavailable` — Flex capacity was requested and, after bounded Flex-only retries,
+  never succeeded. No higher-priced tier was used automatically; the repository is left
+  exactly as it was before the task started. See "Service Tier Policy" below.
 
 The CLI's exit code reflects this: `run`/`run-all` exit non-zero unless every task actually
 `completed` (or was legitimately `skipped`).
 
 ## Role Defaults
 
+Every automatically routed role below runs on Flex only -- see "Service Tier Policy"
+below for what that means and why.
+
 - `mechanical_worker` -> `gpt-5.4-nano` (`flex`, reasoning `none/low`)
-- `classification_worker` -> `gpt-5-nano` (`flex/default`, reasoning `none`, no patch)
+- `classification_worker` -> `gpt-5-nano` (`flex`, reasoning `none`, no patch)
 - `simple_builder` -> `gpt-5.4-mini` (`flex`, reasoning `low`)
-- `general_builder` -> `gpt-5.4-mini` (`flex/default`, reasoning `low/medium`)
-- `coding_optimized_builder` -> `gpt-5.3-codex` (`default`, reasoning `medium`)
-- `frontier_reviewer` -> `gpt-5.5` (`default`, diagnosis-first)
+- `general_builder` -> `gpt-5.4-mini` (`flex`, reasoning `low/medium`)
+- `coding_optimized_builder` -> `gpt-5.4-mini` (`flex`, reasoning `medium`; retargeted
+  from `gpt-5.3-codex`, which does not support Flex)
+- `frontier_reviewer` -> `gpt-5.5` (`default`, diagnosis-first, dry-run only today)
+- `frontier_coding_reviewer` -> `gpt-5.3-codex` (`default`, manual-override-only, never
+  auto-routed -- codex has no Flex support)
 - `emergency_pro_reviewer` -> `gpt-5.5-pro` (manual approval only)
 
 `mechanical_worker` remains the active routed nano role for tiny deterministic coding and bounded patches. `classification_worker` is a canonical role for classification and summarization workloads, but is currently manual/reserved unless selected explicitly by config or policy.
@@ -92,6 +102,33 @@ These three run automatically on every push/PR via `.github/workflows/ci.yml`.
   a commit), the task fails safely instead of committing on top of unexpected state.
 
 See [Safety](docs/SAFETY.md) for the full design.
+
+## Service Tier Policy: Flex Is Mandatory
+
+Cost predictability is prioritized over latency. Every automatically routed OpenAI call
+requests the `flex` service tier -- roughly **50% cheaper per token than Standard/Default**
+for supported models, at the cost of higher latency and occasionally reduced availability.
+This is enforced as a real invariant, checked at config-load time, not merely a default:
+
+- A configuration that would let an automatically-routable role skip Flex, declare an
+  automatic fallback tier, or route through a model without verified Flex pricing is
+  **rejected outright** when the config is loaded.
+- There is **no automatic fallback** to Standard, Default, Priority, or Fast, ever. On a
+  transient Flex failure, the engine retries a bounded number of times
+  (`inference.builder_service_tier.flex.max_flex_retries`) -- every retry still requests
+  Flex. Once exhausted, the task ends with `flex_unavailable`, not an escalation to a
+  pricier tier.
+- If OpenAI ever reports back a different tier than what was requested, that response is
+  never accepted as a normal success -- the task is `blocked` and the discrepancy is
+  recorded.
+- `gpt-5.3-codex` does not support Flex (live-verified against the real API). Its former
+  role, `coding_optimized_builder`, was retargeted to `gpt-5.4-mini`. `frontier_coding_reviewer`
+  intentionally keeps codex but is manual-override-only, never auto-routed.
+- The **only** way to use a non-Flex tier is an explicit, per-run, visible override:
+  `coding-orchestrator --allow-non-flex-tier {default,priority,batch,fast} run ...`. It is
+  never enabled by config inheritance and is logged prominently every time it's used.
+
+See [Cost Control](docs/COST_CONTROL.md) for the full design.
 
 ## Known Limitations
 

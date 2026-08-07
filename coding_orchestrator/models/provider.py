@@ -24,6 +24,23 @@ class ProviderTransientError(ProviderError):
     """Raised for retryable provider failures (rate limits, timeouts, connection errors)."""
 
 
+class FlexUnavailableError(ProviderError):
+    """Raised when bounded Flex-only retries are exhausted without a successful call.
+
+    Never triggers a switch to another service tier -- the caller must stop and report
+    an accurate "flex_unavailable" outcome, not silently escalate to a higher-priced
+    tier.
+    """
+
+
+class ServiceTierMismatchError(ProviderError):
+    """Raised when a call requested as Flex is reported back by the provider as having
+    run on a different service tier. Under the strict Flex-only policy this must never
+    be treated as a normal successful Flex call, even if the response is otherwise
+    usable -- the discrepancy is recorded and the task is blocked conservatively.
+    """
+
+
 class BuilderOutput(BaseModel):
     patch: str
     touched_files: list[str] = Field(default_factory=list)

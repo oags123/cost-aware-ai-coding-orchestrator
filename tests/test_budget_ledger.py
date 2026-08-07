@@ -11,28 +11,37 @@ from coding_orchestrator.schemas import TaskSpec
 
 
 def pricing(output_tokens: int = 1000) -> PricingSettings:
-    return PricingSettings(
-        roles={
-            "general_builder:flex": ModelPricing(
-                provider="test",
-                model="builder-flex",
-                inference_tier="flex",
-                input_usd_per_1m_tokens=1.0,
-                output_usd_per_1m_tokens=2.0,
-                max_output_tokens=output_tokens,
-                budget_pool="builder",
-            ),
-            "frontier_reviewer:default": ModelPricing(
-                provider="test",
-                model="reviewer-default",
-                inference_tier="default",
-                input_usd_per_1m_tokens=10.0,
-                output_usd_per_1m_tokens=20.0,
-                max_output_tokens=output_tokens,
-                budget_pool="reviewer",
-            ),
-        }
+    # Every automatically-routable role needs a "{role}:flex" pricing entry, or
+    # AppConfig's strict Flex-only policy validator rejects construction.
+    roles = {
+        f"{role}:flex": ModelPricing(
+            provider="test",
+            model="builder-flex",
+            service_tier="flex",
+            inference_tier="flex",
+            input_usd_per_1m_tokens=1.0,
+            output_usd_per_1m_tokens=2.0,
+            max_output_tokens=output_tokens,
+            budget_pool="builder",
+        )
+        for role in (
+            "mechanical_worker",
+            "classification_worker",
+            "simple_builder",
+            "general_builder",
+            "coding_optimized_builder",
+        )
+    }
+    roles["frontier_reviewer:default"] = ModelPricing(
+        provider="test",
+        model="reviewer-default",
+        inference_tier="default",
+        input_usd_per_1m_tokens=10.0,
+        output_usd_per_1m_tokens=20.0,
+        max_output_tokens=output_tokens,
+        budget_pool="reviewer",
     )
+    return PricingSettings(roles=roles)
 
 
 def budget_settings(
