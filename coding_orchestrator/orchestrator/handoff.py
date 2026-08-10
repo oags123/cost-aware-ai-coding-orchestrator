@@ -71,6 +71,14 @@ REASON_DESCRIPTIONS: dict[str, str] = {
     "timeout": (
         "The task exceeded its configured runtime budget before completing."
     ),
+    "requires_human_approval": (
+        "The task was blocked before any model call was attempted -- either its "
+        "complexity is 'critical', its classified workflow is disabled, or a "
+        "coarse pre-check already determined its estimated scope would exceed "
+        "the configured budget. This task's scope may be too large for a "
+        "bounded nano/mini role at all; consider ChatGPT for it from the start "
+        "rather than narrowing it and retrying."
+    ),
 }
 
 

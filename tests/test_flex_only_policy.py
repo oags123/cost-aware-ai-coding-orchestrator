@@ -201,6 +201,10 @@ def test_flex_unavailable_preserves_dirty_preexisting_work_and_reports_accuratel
     assert state.final_status not in {"completed", "failed", "blocked"}
     message = state.validation_results["service_tier"]["message"]
     assert "No higher-priced tier was used" in message
+    assert "handoff_package" in state.tool_results
+    handoff_path = Path(state.tool_results["handoff_package"])
+    assert handoff_path.exists()
+    assert "reason: flex_unavailable" in handoff_path.read_text(encoding="utf-8")
 
     current_app_sha = subprocess.run(
         ["git", "hash-object", "app.py"], cwd=tmp_path, check=True, capture_output=True, text=True

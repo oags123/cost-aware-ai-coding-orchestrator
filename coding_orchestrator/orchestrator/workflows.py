@@ -55,7 +55,12 @@ class Workflow:
         )
 
     def _current_file_contents(self, task: TaskSpec, state: OrchestratorState) -> str:
-        if self.name in NON_MODIFYING_WORKFLOWS or not task.allowed_files or not state.repo_path:
+        # Non-modifying workflows (explain_code/architecture_review/security_review)
+        # still need to see the allowed files' actual content to do their job --
+        # only the instruction wording below differs, not whether content is
+        # included at all. Omitting it here previously meant an explain_code task
+        # was asked to explain a file it was never shown.
+        if not task.allowed_files or not state.repo_path:
             return ""
         root = Path(state.repo_path).resolve()
         sections: list[str] = []
@@ -70,7 +75,12 @@ class Workflow:
             sections.append(f"\n\n--- Current content of {relative} ---\n{content}")
         if not sections:
             return ""
-        return "\n\nCurrent file contents (patch against this exactly):" + "".join(sections)
+        header = (
+            "\n\nCurrent file contents (for reference):"
+            if self.name in NON_MODIFYING_WORKFLOWS
+            else "\n\nCurrent file contents (patch against this exactly):"
+        )
+        return header + "".join(sections)
 
 
 WORKFLOWS: dict[str, Workflow] = {

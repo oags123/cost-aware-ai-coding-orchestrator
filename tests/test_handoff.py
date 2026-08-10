@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
-from coding_orchestrator.config import HandoffSettings
+from coding_orchestrator.config import AppConfig, HandoffSettings, LimitSettings
+from coding_orchestrator.orchestrator.engine import WorkflowEngine
 from coding_orchestrator.orchestrator.handoff import HandoffBuilder, list_handoffs
 from coding_orchestrator.schemas import (
     AttemptMetrics,
@@ -11,6 +13,15 @@ from coding_orchestrator.schemas import (
     OrchestratorState,
     TaskSpec,
 )
+
+
+def _init_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+    (path / "app.py").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=path, check=True, capture_output=True)
 
 
 def _task(**overrides: object) -> TaskSpec:
@@ -158,3 +169,106 @@ def test_list_handoffs_enumerates_newest_first(tmp_path: Path) -> None:
     assert records[0]["reason"] == "retries_exhausted"
     assert records[1]["task_id"] == "T-OLD"
     assert str(newer) == records[0]["path"]
+
+
+def test_engine_writes_handoff_on_budget_exceeded(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    config = AppConfig(
+        repo_path=str(tmp_path),
+        state_path=str(tmp_path / "state.json"),
+        log_path=str(tmp_path / "log.jsonl"),
+    )
+    # Zero every auto-routable role's budget so the per-role pre-call check
+    # inside the builder loop fails deterministically regardless of which of
+    # the three roles gets selected -- exercising BudgetExceeded raised deep in
+    # _run_role_builder, not the coarse pre-attempt requires_human_approval gate
+    # (covered separately below).
+    config.budget = config.budget.model_copy(
+        update={
+            "role_budgets_usd": {
+                "mechanical_worker": 0.0,
+                "simple_builder": 0.0,
+                "general_builder": 0.0,
+            }
+        }
+    )
+    engine = WorkflowEngine(config)
+    task = TaskSpec(id="T-BUDGET", title="Fix bug", allowed_files=["app.py"])
+
+    state = engine.run_task(task)
+
+    assert state.final_status == "blocked"
+    assert "handoff_package" in state.tool_results
+    handoff_path = Path(state.tool_results["handoff_package"])
+    assert handoff_path.exists()
+    assert "reason: budget_exceeded" in handoff_path.read_text(encoding="utf-8")
+
+
+def test_engine_writes_handoff_when_blocked_before_any_attempt(tmp_path: Path) -> None:
+    """The coarse pre-attempt requires_human_approval gate (task complexity is
+    'critical', or the classified workflow is disabled) is a distinct code path
+    from the deeper per-role BudgetExceeded above -- it returns before the
+    retry loop even starts, so it needs its own handoff call.
+    """
+    _init_repo(tmp_path)
+    config = AppConfig(
+        repo_path=str(tmp_path),
+        state_path=str(tmp_path / "state.json"),
+        log_path=str(tmp_path / "log.jsonl"),
+    )
+    engine = WorkflowEngine(config)
+    task = TaskSpec(
+        id="T-CRITICAL", title="Fix bug", allowed_files=["app.py"], complexity="critical"
+    )
+
+    state = engine.run_task(task)
+
+    assert state.final_status == "blocked"
+    assert state.requires_human_approval
+    assert "handoff_package" in state.tool_results
+    handoff_path = Path(state.tool_results["handoff_package"])
+    assert handoff_path.exists()
+    assert "reason: requires_human_approval" in handoff_path.read_text(encoding="utf-8")
+
+
+def test_engine_writes_handoff_on_limits_exceeded(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    config = AppConfig(
+        repo_path=str(tmp_path),
+        state_path=str(tmp_path / "state.json"),
+        log_path=str(tmp_path / "log.jsonl"),
+        limits=LimitSettings(max_input_tokens_per_call=1),
+    )
+    engine = WorkflowEngine(config)
+    task = TaskSpec(id="T-LIMITS", title="Fix bug", allowed_files=["app.py"])
+
+    state = engine.run_task(task)
+
+    assert state.final_status == "blocked"
+    assert "handoff_package" in state.tool_results
+    handoff_path = Path(state.tool_results["handoff_package"])
+    assert handoff_path.exists()
+    assert "reason: limits_exceeded" in handoff_path.read_text(encoding="utf-8")
+
+
+def test_handoff_can_be_disabled(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    config = AppConfig(
+        repo_path=str(tmp_path),
+        state_path=str(tmp_path / "state.json"),
+        log_path=str(tmp_path / "log.jsonl"),
+        handoff=HandoffSettings(enabled=False),
+    )
+    engine = WorkflowEngine(config)
+    task = TaskSpec(
+        id="T-DISABLED", title="Fix bug", allowed_files=["app.py"], complexity="critical"
+    )
+
+    state = engine.run_task(task)
+
+    assert state.final_status == "blocked"
+    assert "handoff_package" not in state.tool_results
+    # HandoffBuilder always creates its (empty) output directory eagerly, like
+    # every other data-path component in the engine -- what matters is that no
+    # handoff *file* was written when disabled.
+    assert list((tmp_path / "logs" / "handoffs").glob("*-handoff.md")) == []

@@ -186,6 +186,7 @@ class WorkflowEngine:
             if state.requires_human_approval:
                 state.final_status = "blocked"
                 self._rollback_if_checkpoint(checkpoint)
+                self._write_handoff(task, state, "requires_human_approval", validation_errors)
                 return self._finish(state, "task_blocked")
             while state.retry_count < task.max_attempts:
                 guard.check()

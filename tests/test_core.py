@@ -196,6 +196,10 @@ def test_workflow_failure_retries_rolls_back_and_escalates(
     assert rollback_calls
     assert state.final_status == "escalated"
     assert "escalation_package" in state.tool_results
+    assert "handoff_package" in state.tool_results
+    handoff_path = Path(state.tool_results["handoff_package"])
+    assert handoff_path.exists()
+    assert "reason: retries_exhausted" in handoff_path.read_text(encoding="utf-8")
 
 
 def test_commit_failure_does_not_complete(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

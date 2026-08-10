@@ -154,6 +154,33 @@ def test_modifying_workflow_context_includes_actual_current_file_contents(
     assert "return a - b" in context
 
 
+def test_non_modifying_workflow_context_includes_file_contents_for_reference(
+    tmp_path: Path,
+) -> None:
+    # Regression test: a live OpenAI call for an explain_code task on gpt-5-nano
+    # responded "I can't see pkg/calc.py. Please paste ... the file contents"
+    # because _current_file_contents unconditionally skipped every
+    # NON_MODIFYING_WORKFLOWS name, even though allowed_files was set -- an
+    # explain_code task was never shown the code it was asked to explain. Content
+    # must still be included for non-modifying workflows, just without the
+    # "patch against this exactly" instruction (which only makes sense for a
+    # workflow that produces a diff).
+    init_repo(tmp_path)
+    commit_file(tmp_path, "calc.py", "def multiply(a, b):\n    return a * b\n")
+    state = OrchestratorState(
+        request_id="r", user_request="explain", complexity="trivial", repo_path=str(tmp_path)
+    )
+
+    context = WORKFLOWS["explain_code"].build_context(
+        TaskSpec(id="T-1", title="Explain multiply", allowed_files=["calc.py"]), state
+    )
+
+    assert "def multiply(a, b):" in context
+    assert "return a * b" in context
+    assert "for reference" in context
+    assert "patch against this exactly" not in context
+
+
 def test_context_file_reading_stays_within_workspace(tmp_path: Path) -> None:
     init_repo(tmp_path)
     commit_file(tmp_path, "app.py", "safe content\n")
