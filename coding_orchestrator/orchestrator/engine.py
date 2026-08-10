@@ -129,12 +129,27 @@ class WorkflowEngine:
 
     def _changed_files(self) -> list[str]:
         """git-detected changed files, excluding the orchestrator's own runtime data
-        (ledger/state/log/escalations) so its own bookkeeping is never mistaken for
-        task output by patch/permission validation or convergence's unrelated-file-
-        touch detection.
+        (ledger/state/log/escalations) and configured tool-cache directories
+        (git.preserve_untracked_dirs -- .pytest_cache/.mypy_cache/.ruff_cache/
+        __pycache__/etc.) so neither the orchestrator's own bookkeeping nor a
+        validator's own side effects (e.g. `python -m compileall` writing
+        `__pycache__/*.pyc`, or pytest/mypy/ruff creating their cache directory on
+        first run) are ever mistaken for task output by patch/permission validation
+        or convergence's unrelated-file-touch detection. Cache artifacts from an
+        earlier attempt in the same task run are not cleaned up between attempts
+        (only checkpoint/rollback resets the tree), so this must be excluded by
+        directory prefix, not just exact path, and on every call -- not only once.
         """
         own = set(self._own_data_paths)
-        return [path for path in self.git.changed_files() if path not in own]
+        ignored_dirs = {item.strip("/") for item in self.config.git.preserve_untracked_dirs}
+
+        def is_ignored(path: str) -> bool:
+            if path in own:
+                return True
+            first_segment = path.split("/", 1)[0]
+            return first_segment in ignored_dirs
+
+        return [path for path in self.git.changed_files() if not is_ignored(path)]
 
     def _relative_own_data_paths(self, paths: list[Path]) -> list[str]:
         """Paths (relative to repo root) the orchestrator itself writes operational
@@ -196,7 +211,8 @@ class WorkflowEngine:
                     state.final_status = "dry_run"
                     self._rollback_if_checkpoint(checkpoint)
                     return self._finish(state, "task_dry_run")
-                results = self.limits.enforce_validation_output(self._validate(task))
+                raw_results, changed = self._validate(task)
+                results = self.limits.enforce_validation_output(raw_results)
                 state.validation_results = {result.name: result.model_dump() for result in results}
                 validation_errors = [result.message for result in results if not result.passed]
                 if any(
@@ -205,19 +221,25 @@ class WorkflowEngine:
                 ):
                     self._record_limit_failure(state, "validation_output_limit_exceeded")
                 if not validation_errors:
-                    changed = self._changed_files()
                     if not changed and state.selected_workflow not in NON_MODIFYING_WORKFLOWS:
                         state.final_status = "no_change"
                         self._rollback_if_checkpoint(checkpoint)
                         return self._finish(state, "task_no_change")
-                    self._record_attempt_metrics(task, state, results)
+                    self._record_attempt_metrics(task, state, results, changed)
                     self.git.verify_head(checkpoint)
                     self._commit(task, state, changed)
                     state.final_status = "completed"
                     self.budget.record(state)
                     self.git.restore_pending_work(checkpoint)
                     return self._finish(state, "task_completed")
-                decision = self._record_attempt_metrics(task, state, results)
+                # Captured now, before any rollback -- git.diff() would return
+                # nothing useful once the working tree has already been reset back
+                # to the pre-task checkpoint. Escalation/diagnosis/handoff
+                # artifacts all read this instead of calling git.diff() fresh, so
+                # a human or ChatGPT reviewing them can actually see what the last
+                # attempt tried, not an empty diff.
+                state.tool_results["last_attempt_diff"] = self.git.diff()
+                decision = self._record_attempt_metrics(task, state, results, changed)
                 self.logger.log(
                     "validation_failed",
                     request_id=state.request_id,
@@ -301,6 +323,10 @@ class WorkflowEngine:
             validation_errors.append(str(exc))
             state.tool_results["error_type"] = type(exc).__name__
             state.tool_results["error_traceback"] = traceback.format_exc()
+            # Always captured fresh here (not setdefault) -- reflects whatever the
+            # working tree actually looks like at the moment of failure, which may
+            # differ from an earlier attempt's captured diff in this same task run.
+            state.tool_results["last_attempt_diff"] = self.git.diff()
             self.logger.log(
                 "unexpected_error",
                 request_id=state.request_id,
@@ -311,6 +337,7 @@ class WorkflowEngine:
             )
             self._rollback_if_checkpoint(checkpoint)
             self._escalate_if_allowed(task, state, validation_errors)
+            self._write_handoff(task, state, "unexpected_error", validation_errors)
             return self._finish(state, "task_failed")
 
     def run_all(self, tasks_dir: Path) -> list[OrchestratorState]:
@@ -672,11 +699,21 @@ class WorkflowEngine:
         self.budget.check_pre_call(task, estimate)
         self.budget.record_estimate(estimate, status="estimated")
 
-    def _validate(self, task: TaskSpec) -> list[ValidationResult]:
+    def _validate(self, task: TaskSpec) -> tuple[list[ValidationResult], list[str]]:
+        # `changed` is captured once, before any validator runs, and must be reused
+        # for everything downstream in this attempt (the no_change check, the
+        # commit, and convergence's changed-file metrics) -- never recomputed
+        # afterward. SyntaxValidator's `compileall` (and, depending on
+        # task.validation_commands, ruff/mypy/pytest) can create their own cache
+        # directories (`__pycache__/`, `.pytest_cache/`, etc.) as a side effect of
+        # running, which would otherwise be misread as untracked changes the model
+        # itself made -- previously causing a live-verified false
+        # "unrelated_file_touch" divergence that hard-blocked a task after a single
+        # attempt even though the model's patch was correctly scoped.
         changed = self._changed_files()
         commands = task.validation_commands or self.config.validation.default_commands
         timeout = self.config.timeouts.max_attempt_runtime_seconds
-        return [
+        results = [
             CommandSafetyValidator(
                 commands,
                 self.config.tool_permissions.allowlisted_shell_commands,
@@ -690,6 +727,7 @@ class WorkflowEngine:
             SyntaxValidator(changed, self.repo_path, timeout).validate(),
             TestValidator(commands, self.repo_path, timeout).validate(),
         ]
+        return results, changed
 
     def _commit(self, task: TaskSpec, state: OrchestratorState, changed_files: list[str]) -> None:
         result = self.git.commit_task(task.id, task.title, changed_files, task.allowed_files)
@@ -702,12 +740,13 @@ class WorkflowEngine:
         task: TaskSpec,
         state: OrchestratorState,
         results: list[ValidationResult],
+        changed_files: list[str],
     ) -> ConvergenceDecision:
         previous = state.attempt_metrics[-1] if state.attempt_metrics else None
         metrics = self.convergence.collect_attempt_metrics(
             attempt_number=state.retry_count + 1,
             validation_results=results,
-            changed_files=self._changed_files(),
+            changed_files=changed_files,
             allowed_files=task.allowed_files,
             tool_results=state.tool_results,
             previous=previous,
@@ -807,6 +846,18 @@ class WorkflowEngine:
         self._finish(state, "diagnosis_needed")
         return False
 
+    def _last_diff(self, state: OrchestratorState) -> str:
+        """The diff of the most recent attempt that actually applied a patch,
+        captured before any rollback. Falls back to a fresh `git diff` for cases
+        with no captured value (e.g. blocked before any attempt was made, where an
+        empty diff is correct). Escalation/diagnosis/handoff artifacts must use
+        this instead of calling `self.git.diff()` directly -- by the time most of
+        them run, the working tree has already been reset to the pre-task
+        checkpoint, and a fresh call would silently return nothing useful.
+        """
+        captured = state.tool_results.get("last_attempt_diff")
+        return captured if isinstance(captured, str) and captured else self.git.diff()
+
     def _build_review_packet(
         self,
         task: TaskSpec,
@@ -816,7 +867,7 @@ class WorkflowEngine:
         return self.review_packet_builder.build(
             task=task,
             state=state,
-            diff=self.git.diff(),
+            diff=self._last_diff(state),
             logs=self._collect_relevant_logs(state),
             validation_errors=validation_errors,
             remaining_task_usd=max(0.0, task.max_cost_usd - state.estimated_cost_usd),
@@ -830,7 +881,7 @@ class WorkflowEngine:
         validation_errors: list[str],
         review_packet: ReviewPacket | None = None,
     ) -> None:
-        diff = self.git.diff()
+        diff = self._last_diff(state)
         logs = self._collect_relevant_logs(state)
         review_packet = review_packet or self._build_review_packet(task, state, validation_errors)
         state.tool_results["review_packet"] = review_packet.model_dump()
@@ -929,7 +980,7 @@ class WorkflowEngine:
         path = self.escalation.create_package(
             task=task,
             state=state,
-            diff=self.git.diff(),
+            diff=self._last_diff(state),
             logs=self._collect_relevant_logs(state),
             validation_errors=validation_errors,
         )
@@ -973,7 +1024,7 @@ class WorkflowEngine:
                 task=task,
                 state=state,
                 reason=reason,
-                diff=self.git.diff(),
+                diff=self._last_diff(state),
                 validation_errors=validation_errors,
                 budget_snapshot=budget_snapshot,
             )

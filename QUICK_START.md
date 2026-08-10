@@ -178,6 +178,14 @@ apply corrected source files directly, and just run the orchestrator again —
 ChatGPT, or produced by an earlier orchestrator run. No special "resume" command
 is needed.
 
+**Read every returned task file, especially `validation_commands`, before
+running it.** There's no sandbox — an allowlisted interpreter (`python`/
+`python3`) can run arbitrary code, so a task file is exactly as trustworthy as
+a shell command you'd type yourself. This is precisely why this step stays
+manual; see [ChatGPT Handoff Workflow](docs/CHATGPT_HANDOFF_WORKFLOW.md) for
+why unattended ingestion of returned files is a blocker, not a future
+nice-to-have.
+
 ## How the final Claude Code review fits in
 
 Once `coding-orchestrator validate` passes and the repository looks

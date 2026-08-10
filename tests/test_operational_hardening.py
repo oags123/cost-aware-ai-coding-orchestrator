@@ -85,6 +85,49 @@ def base_config(tmp_path: Path) -> AppConfig:
     )
 
 
+def test_syntax_validator_pycache_side_effect_does_not_trigger_false_divergence(
+    tmp_path: Path,
+) -> None:
+    # Regression test, live-verified: a real gpt-5-mini/Flex call produced a correctly
+    # scoped single-file patch that applied cleanly, but validation legitimately failed
+    # (an unrelated real reason). SyntaxValidator's `compileall` step -- which always
+    # runs on every changed .py file, regardless of task.validation_commands -- writes
+    # `__pycache__/*.pyc` as a side effect. Because convergence's changed-file
+    # comparison used to be recomputed via a second, later `_changed_files()` call made
+    # *after* validation had already run, it saw that new untracked `__pycache__`
+    # directory and misclassified the attempt as `unrelated_file_touch=True`, which
+    # hard-blocked the task as "diverging" after a single attempt even though the
+    # model's own patch only touched the one allowed file. `changed_files` must be
+    # snapshotted once, before any validator runs, and reused for convergence metrics.
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "old\n")
+    engine = WorkflowEngine(
+        base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
+    )
+    task = TaskSpec(
+        id="T-1",
+        title="Fix bug",
+        allowed_files=["app.py"],
+        max_attempts=1,
+        escalation_allowed=True,
+        # Deterministically fails regardless of the patch, exactly like the live
+        # reproduction -- isolates the convergence-metrics bug from patch content.
+        validation_commands=["python3 -c \"import sys; sys.exit(1)\""],
+    )
+
+    state = engine.run_task(task)
+
+    assert len(state.attempt_metrics) == 1
+    assert state.attempt_metrics[0].changed_file_count == 1
+    assert state.attempt_metrics[0].unrelated_file_touch is False
+    assert state.attempt_metrics[0].syntax_regression is False
+    assert state.convergence_decision is not None
+    assert state.convergence_decision.action == "continue_current_role_retry"
+    # Ordinary bounded-retry-then-escalate, not a premature "diverging" hard-stop.
+    assert state.final_status == "escalated"
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old\n"
+
+
 # --- Status distinctness: provider disabled / no-op builder must never == "completed" ---
 
 
@@ -107,7 +150,7 @@ def test_no_op_builder_response_reports_no_change_not_completed(
     commit_file(tmp_path, "app.py", "old\n")
     provider = FakeModelProvider([""])  # parses to no patch at all
     engine = WorkflowEngine(base_config(tmp_path), provider_overrides={"openai": provider})
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"])
 
     state = engine.run_task(task)
@@ -242,7 +285,7 @@ def test_explain_code_workflow_accepts_prose_response_without_patch_parsing(
     commit_file(tmp_path, "app.py", "old\n")
     provider = FakeModelProvider(["## Explanation\n\nThis package does X, Y, Z."])
     engine = WorkflowEngine(base_config(tmp_path), provider_overrides={"openai": provider})
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(id="T-1", title="Explain the code")
 
     state = engine.run_task(task)
@@ -259,7 +302,7 @@ def test_explain_code_workflow_may_complete_without_changes(
     commit_file(tmp_path, "app.py", "old\n")
     provider = FakeModelProvider([""])
     engine = WorkflowEngine(base_config(tmp_path), provider_overrides={"openai": provider})
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(id="T-1", title="Explain the code")  # -> explain_code, non-modifying
 
     state = engine.run_task(task)
@@ -325,7 +368,7 @@ def test_engine_reconciles_actual_usage_into_ledger(
     engine = WorkflowEngine(
         base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"])
 
     state = engine.run_task(task)
@@ -404,7 +447,7 @@ def test_rollback_preserves_preexisting_dirty_tracked_work(
     monkeypatch.setattr(
         engine,
         "_validate",
-        lambda task: [ValidationResult(name="tests", passed=False, message="fail")],
+        lambda task: ([ValidationResult(name="tests", passed=False, message="fail")], []),
     )
     task = TaskSpec(
         id="T-1",
@@ -431,7 +474,7 @@ def test_success_preserves_preexisting_untracked_scratch_file(
     engine = WorkflowEngine(
         base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"])
 
     state = engine.run_task(task)
@@ -649,7 +692,7 @@ def test_flex_retry_triggers_on_typed_transient_error_without_keyword_match(
         }
     )
     engine = WorkflowEngine(config)
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
 
     call_count = {"n": 0}
     requested_tiers: list[str] = []
@@ -688,7 +731,7 @@ def test_flex_unavailable_status_when_bounded_retries_exhausted(
         }
     )
     engine = WorkflowEngine(config)
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(
         engine.openai_provider,
         "generate",
@@ -710,7 +753,7 @@ def test_end_to_end_fake_provider_success(monkeypatch: pytest.MonkeyPatch, tmp_p
     engine = WorkflowEngine(
         base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"])
 
     state = engine.run_task(task)

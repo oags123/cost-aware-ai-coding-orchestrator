@@ -102,7 +102,7 @@ def test_flex_selected_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     init_repo(tmp_path)
     provider = real_patch_provider()
     engine = WorkflowEngine(config(tmp_path), provider_overrides={"openai": provider})
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(
@@ -129,7 +129,7 @@ def test_flex_transient_error_retries_on_flex_only_then_succeeds(
             BuilderServiceTierSettings(flex=FlexTierSettings(max_flex_retries=2)),
         )
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     call_count = {"n": 0}
@@ -166,7 +166,7 @@ def test_flex_unavailable_after_bounded_retries_exhausted_preserves_repo(
             BuilderServiceTierSettings(flex=FlexTierSettings(max_flex_retries=1)),
         )
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
 
     requested_tiers: list[str] = []
 
@@ -201,7 +201,7 @@ def test_report_includes_service_tier_usage(
     init_repo(tmp_path)
     provider = real_patch_provider()
     engine = WorkflowEngine(config(tmp_path), provider_overrides={"openai": provider})
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     engine.run_task(

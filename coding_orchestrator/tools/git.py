@@ -138,8 +138,16 @@ class GitManager:
         head_sha = self.head_sha()
         stashed = False
         if tracked_dirty or untracked:
+            # Long-form pathspec magic (":(exclude)path"), not the ":!path" shorthand:
+            # git's shorthand magic-signature parser treats characters immediately
+            # after "!" as potential additional magic letters, and fails outright
+            # for exclude paths starting with certain characters -- confirmed with a
+            # real git binary (2.43.0), ":!__pycache__" raises "fatal: Unimplemented
+            # pathspec magic '_' in ':!__pycache__'" while ":(exclude)__pycache__"
+            # works correctly. The long form has no such ambiguity for any path.
             excludes = [
-                f":!{item.strip('/')}" for item in (*(preserve_dirs or []), *(preserve_files or []))
+                f":(exclude){item.strip('/')}"
+                for item in (*(preserve_dirs or []), *(preserve_files or []))
             ]
             stash = self._run(
                 [

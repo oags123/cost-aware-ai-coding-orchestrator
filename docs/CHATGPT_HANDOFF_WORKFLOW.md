@@ -208,3 +208,37 @@ orchestrator again.
   asking ChatGPT to process it, and bringing the result back. This is
   deliberate -- it's the "manual approval before spending more" gate, just
   aimed at your ChatGPT subscription instead of a pricier API call.
+
+## Why the return trip should stay manual: `validation_commands` is a real trust boundary
+
+Every task file -- regardless of whether a human wrote it or it came back from a
+ChatGPT/Drive round trip -- can set `validation_commands`. Those commands are
+checked against `tool_permissions.allowlisted_shell_commands` (default: `git`,
+`pytest`, `ruff`, `mypy`, `python`, `python3`), and executed via `shlex.split()`
+with **no shell** (`subprocess.run(..., shell=False)`), never invoked through a
+real shell. That real, verified protection means shell metacharacters
+(`;`, `&&`, `|`, backticks, `$()`, redirects) in a command string are never
+given shell meaning -- they're just literal argument text to whichever program
+runs.
+
+What the allowlist does **not** do is constrain *arguments*. It checks only the
+executable name, not what you tell that executable to do -- and `python`/
+`python3` accept `-c <code>` or `-m <module>`, which is unrestricted code
+execution as the same OS user the orchestrator runs as, no sandboxing of any
+kind. A `validation_commands` entry is exactly as trustworthy as a shell
+command you'd type yourself, because functionally that's what it is. This is
+true today, for hand-written task files, and it doesn't change for
+ChatGPT-authored ones.
+
+This is why the return trip in this workflow is deliberately kept manual: a
+human is expected to look at a task file (including its `validation_commands`)
+before it runs, exactly as they would review a shell command from any other
+source before running it. **Do not build unattended or minimal-review ingestion
+of externally-generated task files without first addressing this** -- doing so
+would mean any content that can get a file into your tasks directory (a
+compromised Drive account, a prompt-injected planning session, a
+supply-chain-compromised intermediate step) gets arbitrary code execution on
+the VPS the moment the orchestrator runs it. No sandboxing, containerization,
+or command-content inspection exists in this codebase today, and none is
+planned as part of this workflow. Treat this as a hard blocker, not a nice-to-have,
+before ever relaxing the manual review step.

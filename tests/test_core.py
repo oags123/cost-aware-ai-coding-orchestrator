@@ -146,7 +146,7 @@ def test_workflow_success_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
         validation_commands=["python -c 'pass'"],
     )
 
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
 
     state = engine.run_task(task)
 
@@ -181,7 +181,7 @@ def test_workflow_failure_retries_rolls_back_and_escalates(
     monkeypatch.setattr(
         engine,
         "_validate",
-        lambda task: [ValidationResult(name="tests", passed=False, message="failed")],
+        lambda task: ([ValidationResult(name="tests", passed=False, message="failed")], []),
     )
     monkeypatch.setattr(
         engine.git,
@@ -213,7 +213,7 @@ def test_commit_failure_does_not_complete(monkeypatch: pytest.MonkeyPatch, tmp_p
     engine = WorkflowEngine(config, provider_overrides={"openai": real_patch_provider()})
     task = TaskSpec(id="T-1", title="Fix bug", max_attempts=1, allowed_files=["app.py"])
 
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(
         engine.git,
         "commit_task",

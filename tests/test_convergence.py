@@ -137,7 +137,7 @@ def test_diagnosis_needed_package_generated(tmp_path: Path) -> None:
     engine = WorkflowEngine(config, provider_overrides={"openai": FakeModelProvider(["", ""])})
     task = TaskSpec(id="T-CONV", title="Fix bug", max_attempts=2, max_cost_usd=10)
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
-    engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
+    engine._validate = lambda task: (failures, [])  # type: ignore[method-assign]  # noqa: SLF001
 
     state = engine.run_task(task)
 

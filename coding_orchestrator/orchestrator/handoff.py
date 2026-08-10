@@ -79,6 +79,16 @@ REASON_DESCRIPTIONS: dict[str, str] = {
         "bounded nano/mini role at all; consider ChatGPT for it from the start "
         "rather than narrowing it and retrying."
     ),
+    "unexpected_error": (
+        "An unhandled error aborted the attempt -- most commonly a malformed "
+        "patch from the model (invalid unified diff, a hunk header that doesn't "
+        "match its own body, or a JSON/schema violation) that could not be "
+        "applied or parsed at all, as opposed to an ordinary validation failure. "
+        "See tool_results.error_type/error_traceback in the task's persisted "
+        "state (logs/state.json) for the exact exception. This is a known, "
+        "structural risk of LLM-generated diffs -- a stronger model may produce "
+        "a correctly-formed patch where a cheaper one did not."
+    ),
 }
 
 

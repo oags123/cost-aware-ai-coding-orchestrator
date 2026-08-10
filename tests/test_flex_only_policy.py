@@ -102,7 +102,7 @@ def test_every_automatically_routed_role_uses_flex(
     engine = WorkflowEngine(
         base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(
         id="T-1",
         validation_commands=["python -c 'pass'"],
@@ -134,7 +134,7 @@ def test_no_silent_fallback_tier_ever_requested_across_retries(
         }
     )
     engine = WorkflowEngine(config)
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
 
     requested_tiers: list[str] = []
 
@@ -188,7 +188,7 @@ def test_flex_unavailable_preserves_dirty_preexisting_work_and_reports_accuratel
         }
     )
     engine = WorkflowEngine(config)
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(
         engine.openai_provider,
         "generate",
@@ -228,7 +228,7 @@ def test_estimate_and_ledger_use_flex_pricing_entry(
     engine = WorkflowEngine(
         base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"])
 
     state = engine.run_task(task)
@@ -385,7 +385,7 @@ def test_default_run_always_requests_flex(monkeypatch: pytest.MonkeyPatch, tmp_p
     engine = WorkflowEngine(
         base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     state = engine.run_task(TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]))
 
     assert state.tool_results["requested_service_tier"] == "flex"
@@ -450,7 +450,7 @@ def test_ledger_records_requested_and_actual_tiers(
     engine = WorkflowEngine(
         base_config(tmp_path), provider_overrides={"openai": real_patch_provider()}
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     task = TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"])
 
     state = engine.run_task(task)
@@ -498,7 +498,7 @@ def test_service_tier_mismatch_blocks_task_conservatively(
         ]
     )
     engine = WorkflowEngine(base_config(tmp_path), provider_overrides={"openai": provider})
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
 
     state = engine.run_task(TaskSpec(id="T-1", title="Fix bug", allowed_files=["app.py"]))
 

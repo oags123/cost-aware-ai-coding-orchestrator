@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 
 from coding_orchestrator.config import AppConfig, HandoffSettings, LimitSettings
+from coding_orchestrator.models.fake_provider import FakeModelProvider
+from coding_orchestrator.models.provider import BuilderOutput
 from coding_orchestrator.orchestrator.engine import WorkflowEngine
 from coding_orchestrator.orchestrator.handoff import HandoffBuilder, list_handoffs
 from coding_orchestrator.schemas import (
@@ -272,3 +274,111 @@ def test_handoff_can_be_disabled(tmp_path: Path) -> None:
     # every other data-path component in the engine -- what matters is that no
     # handoff *file* was written when disabled.
     assert list((tmp_path / "logs" / "handoffs").glob("*-handoff.md")) == []
+
+
+def test_engine_writes_handoff_on_unexpected_error(tmp_path: Path) -> None:
+    # Regression test, live-verified: a real gpt-5-mini/Flex call on a retry
+    # attempt produced a malformed unified diff ("corrupt patch at line 8"),
+    # raising PatchApplyError -- caught only by the generic top-level
+    # `except Exception` in _run_task_locked, which previously never wrote a
+    # handoff artifact at all despite this being exactly the kind of "automation
+    # cannot continue" outcome a human/ChatGPT should be able to pick up.
+    _init_repo(tmp_path)
+    malformed_patch = (
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1,1 +1,5 @@\n"  # declares 5 new lines but the body below has only 1
+        "-old\n"
+        "+new\n"
+    )
+    provider = FakeModelProvider(
+        [BuilderOutput(patch=malformed_patch, touched_files=["app.py"], confidence=0.5)]
+    )
+    config = AppConfig(
+        repo_path=str(tmp_path),
+        state_path=str(tmp_path / "state.json"),
+        log_path=str(tmp_path / "log.jsonl"),
+    )
+    engine = WorkflowEngine(config, provider_overrides={"openai": provider})
+    task = TaskSpec(id="T-CORRUPT", title="Fix bug", allowed_files=["app.py"], max_attempts=1)
+    pre_sha = engine.git.head_sha()
+
+    state = engine.run_task(task)
+
+    assert state.final_status == "failed"
+    assert state.tool_results.get("error_type") == "PatchApplyError"
+    assert "handoff_package" in state.tool_results
+    handoff_path = Path(state.tool_results["handoff_package"])
+    assert handoff_path.exists()
+    assert "reason: unexpected_error" in handoff_path.read_text(encoding="utf-8")
+    # Rolled back cleanly -- no partial/bad commit, HEAD unchanged.
+    assert engine.git.head_sha() == pre_sha
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old\n"
+
+
+def test_handoff_diff_reflects_the_actual_attempted_patch_not_the_post_rollback_tree(
+    tmp_path: Path,
+) -> None:
+    # Regression test, live-verified: a real gpt-5-mini/Flex retry loop applied a
+    # correctly-scoped patch on every attempt, but validation was deliberately
+    # arranged to always fail. Every handoff/escalation-building call previously
+    # called `self.git.diff()` *after* rollback had already reset the working
+    # tree back to the pre-task checkpoint, so the diff section was always empty
+    # ("(no diff captured)") -- useless for the exact case it exists to serve.
+    # The diff of the last applied attempt must be captured before rollback and
+    # reused, not recomputed too late.
+    _init_repo(tmp_path)
+    # Attempts aren't rolled back between each other (only at the very end of the
+    # task), so the second attempt's patch must apply against what the first
+    # attempt actually left on disk -- not the original seed content.
+    first_patch = (
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+attempted-fix\n"
+    )
+    second_patch = (
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-attempted-fix\n"
+        "+attempted-fix-again\n"
+    )
+    provider = FakeModelProvider(
+        [
+            BuilderOutput(patch=first_patch, touched_files=["app.py"], confidence=0.7),
+            BuilderOutput(patch=second_patch, touched_files=["app.py"], confidence=0.7),
+        ]
+    )
+    config = AppConfig(
+        repo_path=str(tmp_path),
+        state_path=str(tmp_path / "state.json"),
+        log_path=str(tmp_path / "log.jsonl"),
+    )
+    engine = WorkflowEngine(config, provider_overrides={"openai": provider})
+    task = TaskSpec(
+        id="T-DIFF",
+        title="Fix bug",
+        allowed_files=["app.py"],
+        max_attempts=2,
+        validation_commands=['python3 -c "import sys; sys.exit(1)"'],
+    )
+
+    state = engine.run_task(task)
+
+    assert state.final_status == "escalated"
+    assert "handoff_package" in state.tool_results
+    handoff_content = Path(state.tool_results["handoff_package"]).read_text(encoding="utf-8")
+    assert "attempted-fix-again" in handoff_content
+    assert "(no diff captured)" not in handoff_content
+    # The pre-existing escalation package gets the same fix, for free.
+    escalation_content = Path(state.tool_results["escalation_package"]).read_text(
+        encoding="utf-8"
+    )
+    assert "attempted-fix-again" in escalation_content
+    # Still rolled back correctly despite the richer diff capture.
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old\n"

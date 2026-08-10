@@ -152,3 +152,27 @@ def test_checkpoint_can_reject_dirty_worktree(tmp_path: Path) -> None:
 
     with pytest.raises(DirtyWorktreeError):
         GitManager(tmp_path).checkpoint("T-1", require_clean=True)
+
+
+def test_checkpoint_excludes_dirs_starting_with_underscore(tmp_path: Path) -> None:
+    # Regression test: git's short pathspec-exclude shorthand (":!path") treats
+    # characters immediately after "!" as potential additional magic-signature
+    # letters, and a real git binary (2.43.0) rejects ":!__pycache__" outright with
+    # "fatal: Unimplemented pathspec magic '_' in ':!__pycache__'" -- this broke
+    # every checkpoint() call once "__pycache__" (a name starting with "_", exactly
+    # what SyntaxValidator's compileall step creates) was added to the default
+    # preserve_untracked_dirs list. The long-form ":(exclude)path" magic has no such
+    # ambiguity for any path and must be used instead.
+    init_repo(tmp_path)
+    commit_file(tmp_path, "app.py", "old\n")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"fake bytecode")
+    (tmp_path / "new_dirty.txt").write_text("dirty", encoding="utf-8")
+
+    checkpoint = GitManager(tmp_path).checkpoint("T-1", preserve_dirs=["__pycache__"])
+
+    assert checkpoint.stashed
+    # The excluded directory was left untouched by the stash...
+    assert (tmp_path / "__pycache__" / "app.cpython-312.pyc").exists()
+    # ...while the genuinely dirty file was actually stashed away.
+    assert not (tmp_path / "new_dirty.txt").exists()

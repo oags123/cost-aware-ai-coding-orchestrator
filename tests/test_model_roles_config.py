@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,8 @@ from coding_orchestrator.models.provider import (
     ProviderConfigurationError,
     ProviderRequest,
 )
+from coding_orchestrator.orchestrator.engine import WorkflowEngine
+from coding_orchestrator.schemas import OrchestratorState, TaskSpec
 
 
 def test_default_openai_model_roles_are_configured() -> None:
@@ -393,6 +396,70 @@ def test_three_model_policy_removed_now_unused_aliases() -> None:
         "openai_frontier_pro",
     ):
         assert removed not in alias_fields
+
+
+AUTO_ROUTABLE_BUILDER_ROLES = frozenset({"mechanical_worker", "simple_builder", "general_builder"})
+
+
+def test_select_builder_role_can_never_return_a_gpt5_tier_role(tmp_path: Path) -> None:
+    """Exhaustive regression lock: WorkflowEngine._select_builder_role is the only
+    function anywhere in the codebase that resolves a role for a real builder call
+    (grep confirms coding_optimized_builder/frontier_*/legacy_reasoning_fallback/
+    emergency_pro_reviewer/mini_legacy_fallback are referenced nowhere in production
+    code outside config.py). It must always return one of the three auto-routable,
+    nano/mini-only roles for every reachable combination of inputs -- there is no
+    automatic path to a gpt-5-tier role, by construction.
+    """
+    engine = WorkflowEngine(AppConfig(repo_path=str(tmp_path)))
+    complexities = ["trivial", "simple", "medium", "hard", "critical"]
+    risks = ["low", "medium", "high"]
+    retry_counts = [0, 1, 2]
+    allowed_file_counts = [0, 1, 2, 3]
+    task_types = ["write_tests", "explain_code", "fix_bug", "security_review"]
+    has_validation_options = [True, False]
+
+    for complexity, risk, retry_count, file_count, task_type, has_validation in itertools.product(
+        complexities, risks, retry_counts, allowed_file_counts, task_types, has_validation_options
+    ):
+        task = TaskSpec(
+            id="T-SWEEP",
+            title="sweep",
+            complexity=complexity,  # type: ignore[arg-type]
+            risk=risk,  # type: ignore[arg-type]
+            allowed_files=[f"f{i}.py" for i in range(file_count)],
+            validation_commands=["pytest"] if has_validation else [],
+        )
+        state = OrchestratorState(
+            request_id="r",
+            user_request="sweep",
+            complexity=complexity,  # type: ignore[arg-type]
+            risk_level=risk,  # type: ignore[arg-type]
+            retry_count=retry_count,
+            task_type=task_type,
+        )
+
+        role_name = engine._select_builder_role(task, state)  # noqa: SLF001
+
+        assert role_name in AUTO_ROUTABLE_BUILDER_ROLES, (
+            f"_select_builder_role returned {role_name!r} (complexity={complexity}, "
+            f"risk={risk}, retry_count={retry_count}, file_count={file_count}, "
+            f"task_type={task_type}, has_validation={has_validation}) -- not one of "
+            f"the three approved auto-routable roles {sorted(AUTO_ROUTABLE_BUILDER_ROLES)}"
+        )
+
+
+def test_auto_routable_roles_resolve_to_nano_or_mini_only() -> None:
+    config = AppConfig()
+    aliases = config.model_aliases.model_dump()
+    nano_mini = {"gpt-5-nano", "gpt-5-mini"}
+
+    for role_name in AUTO_ROUTABLE_BUILDER_ROLES:
+        role = config.model_roles.roles[role_name]
+        model = aliases[role.model_alias]
+        assert model in nano_mini, (
+            f"auto-routable role {role_name!r} resolves to {model!r}, not gpt-5-nano/"
+            "gpt-5-mini"
+        )
 
 
 def test_classification_worker_reasoning_effort_is_not_none() -> None:

@@ -18,18 +18,20 @@ LEGACY_ROLE_RENAMES = {
     "ultra_cheap_classifier": "classification_worker",
 }
 
-# Roles reachable through automatic routing (WorkflowEngine._select_builder_role)
-# without going through the diagnosis/reviewer/emergency escalation paths. Used only
-# for documentation/tests; the strict Flex-only policy below applies GLOBALLY to
-# every role in the registry, not just this subset -- see
-# AppConfig._enforce_flex_only_policy and ModelRoleSettings.live_calls_disabled.
+# The exhaustive, closed set of roles WorkflowEngine._select_builder_role can ever
+# return -- verified by a full input-space sweep in
+# tests/test_model_roles_config.py::test_select_builder_role_can_never_return_a_gpt5_tier_role.
+# classification_worker and coding_optimized_builder are NOT reachable through
+# automatic routing despite being live-callable and Flex-verified -- they require
+# direct/manual role resolution. Documentation/reference only (not imported
+# elsewhere); the strict Flex-only policy below applies GLOBALLY to every role in
+# the registry, not just this subset -- see AppConfig._enforce_flex_only_policy and
+# ModelRoleSettings.live_calls_disabled.
 AUTO_ROUTABLE_BUILDER_ROLES: frozenset[str] = frozenset(
     {
         "mechanical_worker",
-        "classification_worker",
         "simple_builder",
         "general_builder",
-        "coding_optimized_builder",
     }
 )
 
@@ -729,7 +731,14 @@ class ToolPermissions(BaseModel):
 class GitSettings(BaseModel):
     require_clean_worktree: bool = False
     preserve_untracked_dirs: list[str] = Field(
-        default_factory=lambda: ["logs", ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache"]
+        default_factory=lambda: [
+            "logs",
+            ".cache",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            "__pycache__",
+        ]
     )
     preserve_untracked_files: list[str] = Field(default_factory=lambda: [".gitignore"])
 

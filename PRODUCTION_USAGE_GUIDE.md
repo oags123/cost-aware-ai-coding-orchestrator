@@ -1082,7 +1082,16 @@ repository — the orchestrator runs real subprocesses (`git`, `pytest`, etc.) d
 against your filesystem with your user's permissions, constrained only by the allowlist
 and path checks above, not by OS-level isolation. A validation command you configure
 yourself (e.g. a custom `validation_commands` entry) is trusted to be safe — the
-allowlist only checks the *executable name*, not what the command actually does.
+allowlist only checks the *executable name*, not what the command actually does, and
+`python`/`python3 -c`/`-m` grant effectively unrestricted code execution as the
+orchestrator's own user (real shell-metacharacter injection is prevented — commands run
+via `shlex.split()` with no shell — but that doesn't bound what an allowlisted
+interpreter itself can be told to do). This makes `validation_commands` in **any** task
+file, regardless of who or what authored it, exactly as trustworthy as a shell command
+you'd run yourself. See
+[ChatGPT Handoff Workflow — why the return trip should stay manual](docs/CHATGPT_HANDOFF_WORKFLOW.md#why-the-return-trip-should-stay-manual-validation_commands-is-a-real-trust-boundary)
+for why this specifically blocks any unattended ingestion of externally-generated task
+files.
 
 ---
 

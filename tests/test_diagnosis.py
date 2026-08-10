@@ -106,7 +106,7 @@ def test_diagnosis_disabled_still_creates_review_packet(tmp_path: Path) -> None:
         provider_overrides={"openai": FakeModelProvider(["", ""])},
     )
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
-    engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
+    engine._validate = lambda task: (failures, [])  # type: ignore[method-assign]  # noqa: SLF001
 
     state = engine.run_task(TaskSpec(id="T-DISABLED", title="Fix bug", max_cost_usd=10))
 
@@ -122,7 +122,7 @@ def test_diagnosis_enabled_dry_run_records_result(tmp_path: Path) -> None:
         provider_overrides={"openai": FakeModelProvider(["", ""])},
     )
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
-    engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
+    engine._validate = lambda task: (failures, [])  # type: ignore[method-assign]  # noqa: SLF001
 
     state = engine.run_task(TaskSpec(id="T-ENABLED", title="Fix bug", max_cost_usd=10))
 
@@ -141,7 +141,7 @@ def test_diagnosis_budget_block_blocks_reviewer_call(tmp_path: Path) -> None:
     )
     engine = WorkflowEngine(app_config, provider_overrides={"openai": FakeModelProvider(["", ""])})
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
-    engine._validate = lambda task: failures  # type: ignore[method-assign]  # noqa: SLF001
+    engine._validate = lambda task: (failures, [])  # type: ignore[method-assign]  # noqa: SLF001
 
     state = engine.run_task(TaskSpec(id="T-BUDGET", title="Fix bug", max_cost_usd=10))
 
@@ -205,10 +205,10 @@ def test_diagnosis_feeds_guided_builder_retry(tmp_path: Path) -> None:
         ).model_copy(update={"convergence": ConvergenceSettings(max_stagnant_attempts=0)})
     )
     contexts: list[str] = []
-    validations = [
-        [ValidationResult(name="tests", passed=False, message="failed")],
-        [ValidationResult(name="tests", passed=False, message="failed")],
-        [],
+    validations: list[tuple[list[ValidationResult], list[str]]] = [
+        ([ValidationResult(name="tests", passed=False, message="failed")], []),
+        ([ValidationResult(name="tests", passed=False, message="failed")], []),
+        ([], ["app.py"]),
     ]
 
     def fake_builder(

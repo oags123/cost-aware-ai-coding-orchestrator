@@ -71,7 +71,7 @@ def test_engine_selects_mechanical_worker_for_tiny_validated_task(
         allowed_files=["app.py"],
         validation_commands=["python -c 'pass'"],
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(task)
@@ -113,7 +113,7 @@ def test_provider_structured_patch_flows_through_patch_safety(
         allowed_files=["src/app.py"],
         validation_commands=["python -c 'pass'"],
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(task)
@@ -159,7 +159,7 @@ def test_failed_validation_still_triggers_rollback_with_provider_path(
     monkeypatch.setattr(
         engine,
         "_validate",
-        lambda task: [ValidationResult(name="tests", passed=False, message="still failing")],
+        lambda task: ([ValidationResult(name="tests", passed=False, message="still failing")], []),
     )
     monkeypatch.setattr(engine.git, "diff", lambda: "")
 
@@ -200,7 +200,7 @@ def test_budget_ledger_records_provider_role_and_service_tier(
         allowed_files=["app.py"],
         validation_commands=["python -c 'pass'"],
     )
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(task)
@@ -247,7 +247,7 @@ def test_role_provider_backend_is_active_by_default(
     engine = build_provider_engine(tmp_path, provider)
     task = TaskSpec(id="T-5", title="Fix bug", allowed_files=["app.py"])
 
-    monkeypatch.setattr(engine, "_validate", lambda task: [])
+    monkeypatch.setattr(engine, "_validate", lambda task: ([], engine._changed_files()))
     monkeypatch.setattr(engine, "_commit", lambda task, state, changed_files: None)
 
     state = engine.run_task(task)
