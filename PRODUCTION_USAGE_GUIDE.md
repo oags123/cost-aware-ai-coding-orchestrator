@@ -3,10 +3,11 @@
 This is a complete, self-contained operational guide to the Cost-Aware AI Coding
 Orchestrator. It is written entirely from the committed implementation
 (`coding_orchestrator/`), the committed configuration (`config.example.yaml`), and the
-committed test suite as of commit history through the 2026-08-07 three-model
-simplification. Every claim below was verified against source, not copied from older
+committed test suite as of commit history through the 2026-08-10 ChatGPT-subscription
+handoff mechanism. Every claim below was verified against source, not copied from older
 documentation. Where behavior is manual-only, disabled, or unimplemented, that is stated
-explicitly rather than implied.
+explicitly rather than implied. For a shorter, task-oriented starting point, see
+[Quick Start](QUICK_START.md) — this document is the exhaustive reference.
 
 ---
 
@@ -36,6 +37,11 @@ coding tasks against a real git repository:
   was.
 - Tracks every model call's estimated and actual token usage and cost in a local SQLite
   ledger, enforcing project/role/task budget caps before each call.
+- When a task stops without completing — non-convergence, a budget/limit block, Flex
+  unavailability, or exhausted retries — writes a local, zero-cost handoff artifact
+  (`logs/handoffs/`) instead of automatically escalating to a pricier OpenAI API model,
+  intended for a human to hand to a ChatGPT subscription app for stronger-reasoning
+  correction. See [ChatGPT Handoff Workflow](docs/CHATGPT_HANDOFF_WORKFLOW.md).
 
 ### What it does not do
 
@@ -72,7 +78,7 @@ or as a substitute for code review.
 ### Current readiness level and known limitations
 
 **Readiness**: the core loop (classify → route → call OpenAI → apply patch → validate →
-commit or rollback → record cost) is implemented, unit-tested (132 tests, all passing at
+commit or rollback → record cost) is implemented, unit-tested (141 tests, all passing at
 the time of writing — see §9 and §19 for how to reproduce this), and passes `ruff` and
 strict `mypy` cleanly. A CI workflow (`.github/workflows/ci.yml`) runs lint, type-check,
 tests, and two smoke tests on every push/PR to `main`/`master`.
@@ -282,8 +288,8 @@ the `[dev]` extra above).
 .venv/bin/python3 -m coding_orchestrator.app report
 ```
 
-At the time this guide was written, `pytest -q` reported **132 passed**, `ruff check .`
-reported **All checks passed!**, and `mypy .` reported **Success: no issues found in 63
+At the time this guide was written, `pytest -q` reported **141 passed**, `ruff check .`
+reported **All checks passed!**, and `mypy .` reported **Success: no issues found in 65
 source files**. These are the exact commands CI (`.github/workflows/ci.yml`) runs on
 every push/PR to `main`/`master`, plus an import smoke test and a `report` smoke test.
 
@@ -1178,7 +1184,8 @@ internal details — do not publish it externally without review.
 
 | Setting | Recommended conservative value | Rationale |
 |---|---|---|
-| Model routing | Leave the shipped three-role automatic mapping (`mechanical_worker`→gpt-5-nano, `simple_builder`/`general_builder`→gpt-5-mini) unchanged. | This is already the outcome of this repository's own cost/reliability benchmark (§17, `docs/OPERATIONAL_HARDENING_CHANGES.md`). |
+| Model routing | Leave the shipped three-role automatic mapping (`mechanical_worker`→gpt-5-nano, `simple_builder`/`general_builder`→gpt-5-mini) unchanged. | This is already the outcome of this repository's own cost/reliability benchmark (`docs/OPERATIONAL_HARDENING_CHANGES.md`). |
+| Escalation beyond nano/mini | Prefer the handoff workflow (`handoff.enabled: true`, the default) over manually invoking `coding_optimized_builder`/`frontier_*`/gpt-5-tier roles. | Keeps 100% of paid OpenAI API spend on Flex-only nano/mini; strong-reasoning work goes to a flat-cost ChatGPT subscription instead — see [ChatGPT Handoff Workflow](docs/CHATGPT_HANDOFF_WORKFLOW.md). |
 | Reasoning effort | Leave as shipped (`low` for nano/simple roles, `medium` for `general_builder`, `high` only for non-auto-routed reviewer roles). Never set `"none"` on a live role. | `"none"` is live-verified rejected by the API for gpt-5-family models. |
 | Flex-only operation | Never attempt to disable it; there is no supported way to. | It is the entire cost-predictability guarantee of this system. |
 | Task budget | `max_cost_usd` per task: `0.01`–`0.03` for trivial/simple tasks. | Matches the low/typical figures in §6 with headroom for one retry. |
@@ -1241,6 +1248,14 @@ fixed in this repository's history):
   `git stash pop` themselves fail during rollback, there is no distinct `final_status`
   for that; the surrounding failure status is still reported, and the repository state
   must be verified manually (§15).
+- **The ChatGPT handoff round-trip is entirely manual, by design.** The orchestrator
+  writes the local handoff artifact and lists it (`coding-orchestrator handoff`); it
+  does not upload to Google Drive, does not talk to ChatGPT, and does not parse or
+  apply whatever comes back. Uploading, prompting ChatGPT, downloading its response, and
+  placing corrected files/tasks into the repository are all steps you perform yourself
+  — see [ChatGPT Handoff Workflow](docs/CHATGPT_HANDOFF_WORKFLOW.md). Nothing in this
+  codebase converts a `coding-orchestrator validate` failure list into task files
+  automatically either — that translation step also requires an external LLM or a human.
 
 ---
 
@@ -1373,7 +1388,7 @@ ls /path/to/your/target/repo/logs/
 
 ### Production-readiness checklist (for this repository as a whole)
 
-- [ ] `.venv/bin/pytest -q` passes (132 tests at time of writing).
+- [ ] `.venv/bin/pytest -q` passes (141 tests at time of writing).
 - [ ] `.venv/bin/ruff check .` passes.
 - [ ] `.venv/bin/mypy .` passes.
 - [ ] `.venv/bin/python3 -c "import coding_orchestrator.app"` succeeds.

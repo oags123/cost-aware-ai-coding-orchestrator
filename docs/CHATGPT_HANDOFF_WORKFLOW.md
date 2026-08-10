@@ -21,7 +21,7 @@ entirely:
 - **Work local, deterministic tools can do for free**: tests, linting, type
   checking, git operations, patch boundary/permission checks, rollback, budget
   accounting. None of this requires a model call, and this orchestrator already
-  does all of it locally (see [Architecture](ARCHITECTURE.md),
+  does all of it locally (see [Architecture](../PRODUCTION_USAGE_GUIDE.md#2-architecture),
   [Safety](SAFETY.md)).
 
 What's left for the metered OpenAI API -- and the only thing it should be spent

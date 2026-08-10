@@ -78,6 +78,16 @@
 - Absolute paths, path traversal (`../`), and patches that create/modify symlinks are
   always rejected, regardless of `allowed_files`.
 
+## A task stopped without completing and I want to escalate it
+
+Check `logs/handoffs/` (or run `coding-orchestrator handoff` to list pending
+ones) -- whenever a task ends without completing (non-convergence, a budget/limit
+block, Flex unavailability, exhausted retries, or a timeout) and
+`handoff.enabled` is true (the default), a self-contained Markdown artifact is
+written there with everything needed to hand the problem to a ChatGPT
+subscription app instead of spending more against the metered OpenAI API. See
+[ChatGPT Handoff Workflow](CHATGPT_HANDOFF_WORKFLOW.md).
+
 ## My pre-existing uncommitted changes disappeared / came back stashed
 
 - They should not disappear: any pre-existing uncommitted work (tracked or untracked) in

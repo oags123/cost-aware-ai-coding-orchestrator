@@ -189,10 +189,22 @@ ChatGPT subscription app for the next step. See
 
 ## Docs
 
-- [Architecture](docs/ARCHITECTURE.md)
+- **[Quick Start](QUICK_START.md)** -- start here: what this is, the end-to-end
+  workflow, install/run, and the safest path for your first real project.
+- **[Production Usage Guide](PRODUCTION_USAGE_GUIDE.md)** -- the complete
+  operational reference (architecture, every config field, CLI, safety
+  guarantees, troubleshooting, checklists), written to stand in for reading the
+  source.
+- [ChatGPT Handoff Workflow](docs/CHATGPT_HANDOFF_WORKFLOW.md) -- the
+  cost-minimization loop: ChatGPT for planning/generation/escalation, this
+  orchestrator for cheap Flex-only nano/mini repair work, Claude Code for a
+  final review.
 - [Configuration](docs/CONFIGURATION.md)
 - [Model Roles](docs/MODEL_ROLES.md)
 - [Cost Control](docs/COST_CONTROL.md)
 - [Safety](docs/SAFETY.md)
-- [ChatGPT Handoff Workflow](docs/CHATGPT_HANDOFF_WORKFLOW.md)
-- [Operational Hardening Changes](docs/OPERATIONAL_HARDENING_CHANGES.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Development](docs/DEVELOPMENT.md) -- for contributors
+- [Roadmap](docs/ROADMAP.md)
+- [Future Unattended-Safe Auto Mode](docs/FUTURE_UNATTENDED_SAFE_AUTO.md)
+- [Operational Hardening Changes](docs/OPERATIONAL_HARDENING_CHANGES.md) -- dated changelog

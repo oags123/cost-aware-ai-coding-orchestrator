@@ -12,6 +12,9 @@ Main config file: `config.yaml` (example in `config.example.yaml`).
 - `limits`: hard token/context/output/patch and stream caps.
 - `inference.builder_service_tier`: bounded Flex-only retry policy (no fallback tier).
 - `policies`: frontier patching policy and approval gates.
+- `handoff`: local, zero-cost artifact written when a task stops without completing,
+  intended for escalation to a ChatGPT subscription app instead of a pricier OpenAI
+  API model -- see [ChatGPT Handoff Workflow](CHATGPT_HANDOFF_WORKFLOW.md).
 
 ## OpenAI runtime
 
