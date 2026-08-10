@@ -5,6 +5,79 @@ tests" to genuinely operational and safe for real-world use. It follows on from 
 pre-release audit that found the engineering quality was solid (tests/lint/type-check all
 green) but several load-bearing safety and correctness invariants were violated by default.
 
+## ChatGPT-subscription handoff mechanism replaces gpt-5 as the intended escalation path (2026-08-10)
+
+Following a review of the project's actual cost-minimization objective (complete as
+much useful development work as possible for the lowest metered API cost, without
+turning savings into constant human babysitting), the recommended escalation path
+for tasks that nano/mini genuinely can't solve economically was changed from
+"eventually call a pricier OpenAI API model" to "hand off to a ChatGPT subscription,
+which is a flat, already-paid-for cost." Automatic routing was already, and remains,
+incapable of ever reaching a gpt-5-tier role (`_select_builder_role` only returns
+`mechanical_worker`/`simple_builder`/`general_builder`), so this change is additive,
+not a routing change.
+
+**What was added:**
+
+- `HandoffSettings` config section (`handoff.enabled`, `output_dir`,
+  `max_diff_chars`, `max_validation_chars`, `max_context_chars`) and a new
+  `coding_orchestrator/orchestrator/handoff.py` module (`HandoffBuilder`,
+  `list_handoffs`). Building a handoff is pure local file I/O -- no model call, no
+  network access.
+- `WorkflowEngine` now writes a single, self-contained Markdown handoff artifact to
+  `logs/handoffs/` (git-ignored, protected from stash/clean like the ledger/state/
+  log/escalations paths) whenever a task ends without completing for an economic or
+  capability reason: non-convergence (`_create_diagnosis_needed_package`), retries
+  exhausted (`_handle_failure`), a budget block, a limit block, Flex unavailability,
+  or a timeout. Each artifact contains why automation stopped, the task spec, the
+  attempts/convergence evidence, the latest validation failures, the current
+  repository diff, a budget snapshot, and this repository's task-file schema so a
+  response can come back as directly runnable task files. Writing it is best-effort
+  and never masks the underlying error.
+- A new read-only `coding-orchestrator handoff` CLI subcommand lists pending
+  handoff artifacts (path, task id, reason, created_at) as JSON. It makes no
+  network call; uploading to Google Drive (or elsewhere) remains a separate,
+  explicit, human-triggered step using the same `rclone copyto` + verify pattern
+  already established for this project, never `rclone sync`.
+- `docs/CHATGPT_HANDOFF_WORKFLOW.md` documents the full loop: ChatGPT plans and
+  generates the initial repository -> Google Drive -> VPS seed commit -> free
+  `coding-orchestrator validate` -> ChatGPT turns failures into bounded repair
+  tasks -> orchestrator closes gaps cheaply on Flex-only nano/mini -> a handoff is
+  prepared whenever that stops being economical -> ChatGPT (stronger reasoning,
+  subscription cost) produces corrections or a new task set -> back to the VPS ->
+  repeat -> optional final Claude Code (subscription) repository-wide review.
+
+**What was fixed as part of this change**, since it touched the same config
+section: `DiagnosisSettings.model_role` defaulted to `frontier_reviewer`, a
+gpt-5-tier role, even though the diagnosis reviewer itself never actually reaches
+the provider (it's a dry-run-only stub) -- pre-call cost *estimation* for that path
+was nonetheless priced against a gpt-5-tier role. Retargeted to `general_builder`
+so it's priced against a nano/mini-tier role instead, consistent with the "only
+nano/mini for paid work" policy. This also incidentally corrected a pre-existing
+mismatch between `config.py`'s Python defaults for `diagnosis.provider`/`model`
+(`"placeholder"`/`"frontier-reviewer-placeholder"`) and what `config.example.yaml`
+showed (`openai`/`gpt-5`) -- both now consistently show the honest placeholder
+values, since nothing in this path is meant to make a real call.
+
+**What was deliberately not changed:** `coding_optimized_builder` and the
+`frontier_*`/`legacy_reasoning_fallback` gpt-5-tier roles remain exactly as they
+were -- live-callable, Flex, but reachable only by direct/manual role selection,
+never by any automatic path. They were not disabled; they remain available as a
+deliberate, manual, non-default option, consistent with "avoid unnecessary
+rewrites" and "preserve anything that remains useful." The change is entirely
+about what the *automatic and recommended* path does when cheap models stall, not
+about removing existing capability.
+
+**Verification:** full test suite green (137 passed, up from 132 -- 5 new tests in
+`tests/test_handoff.py`, plus an extended assertion in the existing
+`test_diagnosis_needed_package_generated` convergence test confirming a handoff
+artifact is produced end-to-end via a real `WorkflowEngine.run_task` call), `ruff
+check .` clean, `mypy .` clean (65 source files). One pre-existing test
+(`test_diagnosis_budget_block_blocks_reviewer_call`) was updated to reference the
+new default role name it exercises (`general_builder` instead of
+`frontier_reviewer`) -- the behavior it tests (the diagnosis reviewer's own role
+budget blocking its call) is unchanged, only which role name triggers it.
+
 ## Three-model simplification for automatic/reviewer routing (2026-08-07)
 
 Automatic and reviewer routing was evaluated for simplification to exactly three

@@ -133,8 +133,11 @@ def test_diagnosis_enabled_dry_run_records_result(tmp_path: Path) -> None:
 def test_diagnosis_budget_block_blocks_reviewer_call(tmp_path: Path) -> None:
     init_repo(tmp_path)
     app_config = config(tmp_path, DiagnosisSettings(enabled=True, dry_run=True))
+    # DiagnosisSettings.model_role now defaults to "general_builder" (a live,
+    # nano/mini-tier role) rather than "frontier_reviewer", so the reviewer's own
+    # budget is exhausted by zeroing that role's budget instead.
     app_config.budget = app_config.budget.model_copy(
-        update={"role_budgets_usd": {"frontier_reviewer": 0.0}}
+        update={"role_budgets_usd": {"general_builder": 0.0}}
     )
     engine = WorkflowEngine(app_config, provider_overrides={"openai": FakeModelProvider(["", ""])})
     failures = [ValidationResult(name="tests", passed=False, message="failed")]
@@ -143,7 +146,7 @@ def test_diagnosis_budget_block_blocks_reviewer_call(tmp_path: Path) -> None:
     state = engine.run_task(TaskSpec(id="T-BUDGET", title="Fix bug", max_cost_usd=10))
 
     assert state.final_status == "blocked"
-    assert "frontier_reviewer budget" in state.validation_results["budget"]["message"]
+    assert "general_builder budget" in state.validation_results["budget"]["message"]
 
 
 def test_reviewer_direct_patch_rejected() -> None:

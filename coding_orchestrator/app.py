@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coding_orchestrator.config import load_config
 from coding_orchestrator.orchestrator.engine import WorkflowEngine
+from coding_orchestrator.orchestrator.handoff import list_handoffs
 from coding_orchestrator.schemas import TaskSpec
 
 
@@ -26,6 +27,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("validate")
     sub.add_parser("report")
+    # Lists pending local handoff artifacts (see docs/CHATGPT_HANDOFF_WORKFLOW.md).
+    # Read-only and local -- makes no network call; uploading to a configured
+    # rclone remote is a separate, explicit, human-triggered step.
+    sub.add_parser("handoff")
     return parser
 
 
@@ -55,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
             "convergence": engine.convergence_report(),
         }
         print(json.dumps(payload, indent=2))
+        return 0
+    if args.command == "handoff":
+        records = list_handoffs(engine.handoff_builder.output_dir)
+        print(json.dumps(records, indent=2))
         return 0
     return 2
 

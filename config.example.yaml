@@ -100,7 +100,7 @@ model_roles:
       model_alias: openai_mini_legacy
       purpose: normal implementation and repair
       max_input_tokens: 64000
-      max_output_tokens: 6000
+      max_output_tokens: 4000
       max_context_chars: 256000
       reasoning_effort: medium
       verbosity: medium
@@ -368,9 +368,14 @@ convergence:
 diagnosis:
   enabled: false
   dry_run: true
-  provider: openai
-  model: gpt-5
-  model_role: frontier_reviewer
+  provider: placeholder
+  model: frontier-reviewer-placeholder
+  # Points at a live, nano/mini-tier role (never gpt-5) so pre-call cost
+  # estimation for this path stays priced cheap even though the diagnosis
+  # reviewer itself never actually reaches the provider (dry-run placeholder
+  # only). Strong-reasoning escalation for non-converging tasks goes through
+  # the handoff mechanism below, not a pricier OpenAI model.
+  model_role: general_builder
   max_input_tokens: 8000
   max_output_tokens: 1500
   max_context_chars: 24000
@@ -384,6 +389,18 @@ diagnosis:
   max_stdout_chars: 4000
   max_stderr_chars: 4000
   allow_direct_patch: false
+
+# Local, zero-token artifact prepared whenever automatic progress on a task stops
+# without completing (non-convergence, budget/limit block, Flex unavailable, retry
+# exhaustion). Intended for a human to read/upload to the ChatGPT subscription app
+# for stronger-reasoning escalation, instead of the orchestrator automatically
+# spending more on a pricier OpenAI API model. See docs/CHATGPT_HANDOFF_WORKFLOW.md.
+handoff:
+  enabled: true
+  output_dir: logs/handoffs
+  max_diff_chars: 20000
+  max_validation_chars: 8000
+  max_context_chars: 4000
 
 telegram:
   enabled: false
@@ -493,7 +510,7 @@ pricing:
       input_usd_per_1m_tokens: 0.125
       cached_input_usd_per_1m_tokens: 0.0125
       output_usd_per_1m_tokens: 1.00
-      max_output_tokens: 6000
+      max_output_tokens: 4000
       budget_pool: builder
       source_url: https://developers.openai.com/api/docs/pricing
       retrieved_or_verified_date: "2026-05-11"

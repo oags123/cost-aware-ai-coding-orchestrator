@@ -41,6 +41,7 @@ from coding_orchestrator.orchestrator.diagnosis import (
     packet_to_prompt,
 )
 from coding_orchestrator.orchestrator.escalation import EscalationManager
+from coding_orchestrator.orchestrator.handoff import HandoffBuilder
 from coding_orchestrator.orchestrator.limits import LimitExceeded, LimitGuard
 from coding_orchestrator.orchestrator.router import TaskClassifier
 from coding_orchestrator.orchestrator.state import StateStore
@@ -99,13 +100,15 @@ class WorkflowEngine:
         log_path = self._resolve_repo_path(config.log_path)
         state_path = self._resolve_repo_path(config.state_path)
         escalations_path = self._resolve_repo_path(config.escalations_path)
+        handoff_path = self._resolve_repo_path(config.handoff.output_dir)
         self.logger = JsonlLogger(log_path)
         self.telegram = TelegramNotifier(config.telegram, budget_settings)
         self.state_store = StateStore(state_path)
         self.escalation = EscalationManager(escalations_path)
+        self.handoff_builder = HandoffBuilder(config.handoff, handoff_path)
         self.git = GitManager(self.repo_path)
         self._own_data_paths = self._relative_own_data_paths(
-            [ledger_path, log_path, state_path, escalations_path]
+            [ledger_path, log_path, state_path, escalations_path, handoff_path]
         )
         self._own_data_paths.append(".orchestrator.lock")
         self.patch_applier = SafePatchApplier(
@@ -239,6 +242,7 @@ class WorkflowEngine:
             validation_errors.append(str(exc))
             self._rollback_if_checkpoint(checkpoint)
             self._escalate_if_allowed(task, state, validation_errors)
+            self._write_handoff(task, state, "timeout", validation_errors)
             return self._finish(state, "task_timeout")
         except BudgetExceeded as exc:
             state.final_status = "blocked"
@@ -250,6 +254,7 @@ class WorkflowEngine:
                 "message": str(exc),
                 "details": state.tool_results.get("budget_estimate", {}),
             }
+            self._write_handoff(task, state, "budget_exceeded", validation_errors)
             return self._finish(state, "task_budget_blocked")
         except LimitExceeded as exc:
             state.final_status = "blocked"
@@ -262,6 +267,7 @@ class WorkflowEngine:
                 "details": {"status": exc.status},
             }
             self._record_limit_failure(state, exc.status)
+            self._write_handoff(task, state, "limits_exceeded", validation_errors)
             return self._finish(state, exc.status)
         except FlexUnavailableError as exc:
             state.final_status = "flex_unavailable"
@@ -276,6 +282,7 @@ class WorkflowEngine:
                 ),
                 "details": state.tool_results.get("builder_flex_transient_error", {}),
             }
+            self._write_handoff(task, state, "flex_unavailable", validation_errors)
             return self._finish(state, "task_flex_unavailable")
         except ServiceTierMismatchError as exc:
             state.final_status = "blocked"
@@ -734,6 +741,7 @@ class WorkflowEngine:
             state.final_status = "escalated"
         else:
             state.final_status = "failed"
+        self._write_handoff(task, state, "retries_exhausted", validation_errors)
         self._finish(state, state.final_status)
 
     def _handle_non_converging(
@@ -837,6 +845,7 @@ class WorkflowEngine:
             validation_errors=validation_errors,
         )
         state.tool_results["diagnosis_needed_package"] = str(path)
+        self._write_handoff(task, state, "non_converging", validation_errors)
         self.logger.log(
             "diagnosis_needed",
             request_id=state.request_id,
@@ -937,6 +946,52 @@ class WorkflowEngine:
                 "Review the escalation package and decide the next bounded action.",
             )
         return True
+
+    def _write_handoff(
+        self,
+        task: TaskSpec,
+        state: OrchestratorState,
+        reason: str,
+        validation_errors: list[str],
+    ) -> None:
+        """Best-effort: prepare a local, zero-token handoff artifact for the
+        ChatGPT subscription app whenever automatic progress stops without
+        completing. Never raises -- a failure to write this convenience artifact
+        must never mask the original error or change the task's real outcome.
+        """
+        if not self.config.handoff.enabled:
+            return
+        try:
+            budget_usage = self.budget_report()
+            budget_snapshot = {
+                "task budget (max_cost_usd)": task.max_cost_usd,
+                "project total spend so far": f"${budget_usage.project_total_spend_usd:.4f}",
+                "project budget remaining": f"${budget_usage.project_total_remaining_usd:.4f}",
+            }
+            path = self.handoff_builder.build(
+                task=task,
+                state=state,
+                reason=reason,
+                diff=self.git.diff(),
+                validation_errors=validation_errors,
+                budget_snapshot=budget_snapshot,
+            )
+            state.tool_results["handoff_package"] = str(path)
+            self.logger.log(
+                "handoff_prepared",
+                request_id=state.request_id,
+                task_id=task.id,
+                reason=reason,
+                path=str(path),
+            )
+        except Exception as exc:  # best-effort convenience artifact, never fatal
+            self.logger.log(
+                "handoff_preparation_failed",
+                request_id=state.request_id,
+                task_id=task.id,
+                reason=reason,
+                error=str(exc),
+            )
 
     def _finish(self, state: OrchestratorState, event: str) -> OrchestratorState:
         state.finished_at = datetime.now(UTC)

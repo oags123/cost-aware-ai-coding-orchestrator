@@ -130,7 +130,13 @@ class DiagnosisSettings(BaseModel):
     dry_run: bool = True
     provider: str = "placeholder"
     model: str = "frontier-reviewer-placeholder"
-    model_role: str = "frontier_reviewer"
+    # Points at a live, nano/mini-tier role (never a gpt-5-tier role) so that
+    # pre-call cost estimation for this path stays priced against the cheap-only
+    # policy even though the diagnosis reviewer itself never actually reaches the
+    # provider (see orchestrator/diagnosis.py). Strong-reasoning escalation for
+    # non-converging tasks is handled by the handoff mechanism (see
+    # HandoffSettings below), not by calling a pricier OpenAI model.
+    model_role: str = "general_builder"
     max_input_tokens: int = 8_000
     max_output_tokens: int = 1_500
     max_context_chars: int = 24_000
@@ -144,6 +150,25 @@ class DiagnosisSettings(BaseModel):
     max_stdout_chars: int = 4_000
     max_stderr_chars: int = 4_000
     allow_direct_patch: bool = False
+
+
+class HandoffSettings(BaseModel):
+    """Governs the local, zero-token "prepare a handoff for the ChatGPT subscription
+    app" artifact written whenever automatic progress on a task stops without a
+    completion -- non-convergence, budget/limit blocks, Flex unavailability, or
+    retry exhaustion. This is the intended escalation path for problems nano/mini
+    Flex calls can't economically resolve: a human reads/uploads the handoff and
+    asks the ChatGPT subscription app to produce corrections or a new task set,
+    rather than the orchestrator automatically spending more on a pricier OpenAI
+    API model. Writing the file is pure local I/O -- it never makes a model call
+    and never touches the network by itself.
+    """
+
+    enabled: bool = True
+    output_dir: str = "logs/handoffs"
+    max_diff_chars: int = 20_000
+    max_validation_chars: int = 8_000
+    max_context_chars: int = 4_000
 
 
 class TelegramSettings(BaseModel):
@@ -727,6 +752,7 @@ class AppConfig(BaseModel):
     inference: InferenceSettings = Field(default_factory=InferenceSettings)
     convergence: ConvergenceSettings = Field(default_factory=ConvergenceSettings)
     diagnosis: DiagnosisSettings = Field(default_factory=DiagnosisSettings)
+    handoff: HandoffSettings = Field(default_factory=HandoffSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     pricing: PricingSettings = Field(default_factory=PricingSettings)
     validation: ValidationSettings = Field(default_factory=ValidationSettings)

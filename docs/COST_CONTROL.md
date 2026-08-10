@@ -111,3 +111,21 @@ The same benchmark also found that `reasoning_effort="none"` (`classification_wo
 previous value) is rejected by the real API for every gpt-5-family model tested --
 only `minimal`/`low`/`medium`/`high` are accepted server-side. `classification_worker`
 now uses `low`.
+
+### Escalation beyond nano/mini goes to a ChatGPT subscription, not a pricier API model (2026-08-10)
+
+Automatic routing was never able to reach `coding_optimized_builder` or any
+`frontier_*`/gpt-5-tier role (see [Model Roles](MODEL_ROLES.md)), and that remains
+true. What changed is what happens when nano/mini genuinely can't make further
+economical progress: instead of hoping a future automatic escalation to a pricier
+OpenAI API model would help, the engine now writes a local, zero-cost **handoff**
+artifact (`handoff.*` config, `logs/handoffs/`, `coding-orchestrator handoff`) on
+non-convergence, budget/limit blocks, Flex unavailability, and retry exhaustion.
+The intended escalation path for those cases is a human reviewing/uploading that
+artifact and asking a ChatGPT subscription app for stronger reasoning -- a flat,
+already-paid-for cost -- rather than the orchestrator spending more against the
+metered OpenAI API. See [ChatGPT Handoff Workflow](CHATGPT_HANDOFF_WORKFLOW.md)
+for the full loop. `diagnosis.model_role` was also retargeted from
+`frontier_reviewer` to `general_builder` so that even the (still non-functional,
+dry-run-only) internal diagnosis path's cost estimation stays priced against a
+nano/mini-tier role, never a gpt-5-tier one.

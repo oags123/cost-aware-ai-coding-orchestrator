@@ -144,3 +144,9 @@ def test_diagnosis_needed_package_generated(tmp_path: Path) -> None:
     assert state.final_status == "escalated"
     assert state.convergence_status == "non_converging"
     assert "diagnosis_needed_package" in state.tool_results
+    assert "handoff_package" in state.tool_results
+    handoff_path = Path(state.tool_results["handoff_package"])
+    assert handoff_path.exists()
+    content = handoff_path.read_text(encoding="utf-8")
+    assert "reason: non_converging" in content
+    assert "T-CONV" in content

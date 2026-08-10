@@ -9,5 +9,6 @@ logs/*.json
 logs/*.jsonl
 logs/*.sqlite
 logs/escalations/
+logs/handoffs/
 .orchestrator.lock
 .env

@@ -61,6 +61,16 @@ unconditionally, and there is no override that can change that.
 non-reasoning behavior with no Flex-capable substitute, so it is
 analysis/configuration-only rather than retargeted.
 
+**Escalation policy (2026-08-10):** automatic routing was already, and remains,
+incapable of ever reaching a gpt-5-tier role -- `_select_builder_role` only ever
+returns `mechanical_worker`/`simple_builder`/`general_builder`. What's new is the
+recommended path when nano/mini genuinely can't solve a task economically: rather
+than manually reaching for `coding_optimized_builder` or another gpt-5-tier role
+(still possible, but no longer the recommended pattern), the engine prepares a
+local, zero-cost handoff artifact for a human to take to a ChatGPT subscription
+app instead. See [ChatGPT Handoff Workflow](CHATGPT_HANDOFF_WORKFLOW.md) and
+[Cost Control](COST_CONTROL.md).
+
 `mechanical_worker` remains the active routed nano role for tiny deterministic coding and bounded patch work. `classification_worker` is a canonical classification/summarization role, but it is currently manual/reserved unless selected explicitly by config or policy.
 
 Legacy names are accepted for backward compatibility only:

@@ -173,6 +173,20 @@ See [Cost Control](docs/COST_CONTROL.md) for the full design.
 - `small_refactor`, `large_refactor`, `architecture_review`, `dependency_update`, and
   `security_review` workflows are defined but not enabled (`Workflow.enabled=False`).
 
+## Cost-Minimization Workflow (ChatGPT Handoff)
+
+For minimizing metered OpenAI API cost while still automating most of the work,
+this project supports (as of 2026-08-10) a workflow that uses a ChatGPT
+subscription for planning, initial generation, and strong-reasoning escalation,
+and reserves this orchestrator's Flex-only gpt-5-nano/gpt-5-mini calls for cheap,
+bounded, deterministically-validated repair work. When automatic progress on a
+task stops (non-convergence, a budget/limit block, Flex unavailability, or
+exhausted retries), the engine writes a local, zero-cost handoff artifact
+(`logs/handoffs/`, listable via `coding-orchestrator handoff`) instead of
+escalating to a pricier OpenAI API model -- you review/upload it and ask the
+ChatGPT subscription app for the next step. See
+[ChatGPT Handoff Workflow](docs/CHATGPT_HANDOFF_WORKFLOW.md) for the full loop.
+
 ## Docs
 
 - [Architecture](docs/ARCHITECTURE.md)
@@ -180,4 +194,5 @@ See [Cost Control](docs/COST_CONTROL.md) for the full design.
 - [Model Roles](docs/MODEL_ROLES.md)
 - [Cost Control](docs/COST_CONTROL.md)
 - [Safety](docs/SAFETY.md)
+- [ChatGPT Handoff Workflow](docs/CHATGPT_HANDOFF_WORKFLOW.md)
 - [Operational Hardening Changes](docs/OPERATIONAL_HARDENING_CHANGES.md)
